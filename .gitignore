@@ -1,0 +1,23 @@
+# Gradle / Android build output
+.gradle/
+build/
+**/build/
+local.properties
+
+# Signing material
+*.jks
+*.keystore
+*.p12
+*.pem
+
+# IDE / operating system
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.log
+*.idsig
