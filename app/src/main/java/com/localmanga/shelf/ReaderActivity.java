@@ -176,7 +176,8 @@ public final class ReaderActivity extends Activity {
 
     private TextView text(String value, int size, int color, boolean bold) {
         TextView view = new TextView(this); view.setText(value); view.setTextSize(size); view.setTextColor(color);
-        view.setTypeface(android.graphics.Typeface.create("sans", bold ? 1 : 0));
+        view.setTypeface(android.graphics.Typeface.create("sans", bold
+                ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL));
         view.setMaxLines(2); view.setEllipsize(android.text.TextUtils.TruncateAt.END); return view;
     }
     private GradientDrawable round(int color, int radius) {
@@ -186,6 +187,7 @@ public final class ReaderActivity extends Activity {
     private int dp(float value) { return Math.round(value * getResources().getDisplayMetrics().density); }
 
     @Override protected void onDestroy() {
-        repository.saveProgress(comic.id, page); worker.shutdownNow(); recycleCurrent(); super.onDestroy();
+        if (repository != null && comic != null) repository.saveProgress(comic.id, page);
+        worker.shutdownNow(); recycleCurrent(); super.onDestroy();
     }
 }
