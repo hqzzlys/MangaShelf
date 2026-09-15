@@ -2,6 +2,7 @@ package com.localmanga.shelf;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.graphics.Bitmap;
@@ -19,20 +20,25 @@ import android.widget.LinearLayout;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import java.io.File;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public final class ReaderActivity extends Activity {
-    private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    private final ThreadPoolExecutor worker = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
+            new ArrayBlockingQueue<>(1), new ThreadPoolExecutor.DiscardOldestPolicy());
+    private final AtomicInteger decodeGeneration = new AtomicInteger();
     private ComicRepository repository;
     private Comic comic;
-    private ImageView pageView;
+    private ReaderPageView pageView;
     private LinearLayout topBar, controls;
     private TextView pageLabel, remainLabel;
     private SeekBar progress;
     private Bitmap currentBitmap;
     private int page;
     private boolean chromeVisible = true;
+    private volatile boolean destroyed;
     private float touchX;
 
     @Override public void onCreate(Bundle state) {
@@ -53,9 +59,16 @@ public final class ReaderActivity extends Activity {
 
     private void buildUi() {
         FrameLayout root = new FrameLayout(this); root.setBackgroundColor(Color.BLACK);
-        pageView = new ImageView(this); pageView.setScaleType(ImageView.ScaleType.FIT_CENTER); pageView.setBackgroundColor(Color.BLACK);
+        pageView = new ReaderPageView(this); pageView.setScaleType(ImageView.ScaleType.FIT_CENTER); pageView.setBackgroundColor(Color.BLACK);
+        pageView.setContentDescription(getString(R.string.reader_page_description));
         root.addView(pageView, new FrameLayout.LayoutParams(-1, -1));
-        pageView.setOnTouchListener((v, e) -> onPageTouch(e));
+        pageView.setOnTouchListener((view, event) -> {
+            float position = event.getX() / Math.max(1f, pageView.getWidth());
+            if (event.getAction() == MotionEvent.ACTION_UP && Math.abs(event.getX() - touchX) <= dp(55)
+                    && position >= 0.30f && position <= 0.70f) view.performClick();
+            return onPageTouch(event);
+        });
+        pageView.setOnClickListener(view -> toggleChrome());
         topBar = buildTop(); root.addView(topBar, new FrameLayout.LayoutParams(-1, dp(82), Gravity.TOP));
         controls = buildControls(); FrameLayout.LayoutParams cp = new FrameLayout.LayoutParams(-1, dp(170), Gravity.BOTTOM); root.addView(controls, cp);
         setContentView(root);
@@ -81,7 +94,7 @@ public final class ReaderActivity extends Activity {
         progress.setProgressTintList(android.content.res.ColorStateList.valueOf(0xFFF47B20));
         progress.setThumbTintList(android.content.res.ColorStateList.valueOf(0xFFF47B20));
         seekRow.addView(progress, new LinearLayout.LayoutParams(0, dp(40), 1));
-        remainLabel = text("剩余 0 页", 13, Color.WHITE, false); remainLabel.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL); seekRow.addView(remainLabel, lp(dp(78), dp(36)));
+        remainLabel = text(getString(R.string.reader_remaining_pages, 0), 13, Color.WHITE, false); remainLabel.setGravity(Gravity.END | Gravity.CENTER_VERTICAL); seekRow.addView(remainLabel, lp(dp(78), dp(36)));
         panel.addView(seekRow, lp(-1, dp(48)));
         progress.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             public void onProgressChanged(SeekBar s, int value, boolean user) { if (user) updateLabels(value); }
@@ -112,7 +125,6 @@ public final class ReaderActivity extends Activity {
                 float position = event.getX() / Math.max(1f, pageView.getWidth());
                 if (position < 0.30f) showPage(page - 1);
                 else if (position > 0.70f) showPage(page + 1);
-                else toggleChrome();
             }
             return true;
         }
@@ -124,6 +136,7 @@ public final class ReaderActivity extends Activity {
         updateLabels(next); repository.saveProgress(comic.id, next);
         File file = comic.pages.get(next); int targetW = getResources().getDisplayMetrics().widthPixels;
         int targetH = getResources().getDisplayMetrics().heightPixels;
+        int generation = decodeGeneration.incrementAndGet();
         worker.execute(() -> {
             BitmapFactory.Options bounds = new BitmapFactory.Options(); bounds.inJustDecodeBounds = true;
             BitmapFactory.decodeFile(file.getAbsolutePath(), bounds);
@@ -131,15 +144,18 @@ public final class ReaderActivity extends Activity {
             BitmapFactory.Options options = new BitmapFactory.Options(); options.inSampleSize = sample; options.inPreferredConfig = Bitmap.Config.RGB_565;
             final Bitmap bitmap = BitmapFactory.decodeFile(file.getAbsolutePath(), options);
             runOnUiThread(() -> {
-                if (page != next) { if (bitmap != null) bitmap.recycle(); return; }
+                if (destroyed || generation != decodeGeneration.get() || page != next) {
+                    if (bitmap != null) bitmap.recycle();
+                    return;
+                }
                 recycleCurrent(); currentBitmap = bitmap; pageView.setImageBitmap(bitmap);
             });
         });
     }
 
     private void updateLabels(int value) {
-        pageLabel.setText((value + 1) + "/" + comic.pageCount());
-        remainLabel.setText("剩余 " + Math.max(0, comic.pageCount() - value - 1) + " 页");
+        pageLabel.setText(getString(R.string.reader_page_progress, value + 1, comic.pageCount()));
+        remainLabel.setText(getString(R.string.reader_remaining_pages, Math.max(0, comic.pageCount() - value - 1)));
         if (progress.getProgress() != value) progress.setProgress(value);
     }
 
@@ -186,7 +202,18 @@ public final class ReaderActivity extends Activity {
     private LinearLayout.LayoutParams lp(int width, int height) { return new LinearLayout.LayoutParams(width, height); }
     private int dp(float value) { return Math.round(value * getResources().getDisplayMetrics().density); }
 
+    private static final class ReaderPageView extends ImageView {
+        ReaderPageView(Context context) { super(context); }
+
+        @Override public boolean performClick() {
+            super.performClick();
+            return true;
+        }
+    }
+
     @Override protected void onDestroy() {
+        destroyed = true;
+        decodeGeneration.incrementAndGet();
         if (repository != null && comic != null) repository.saveProgress(comic.id, page);
         worker.shutdownNow(); recycleCurrent(); super.onDestroy();
     }

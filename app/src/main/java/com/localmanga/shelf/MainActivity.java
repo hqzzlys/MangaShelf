@@ -16,16 +16,23 @@ import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.Toast;
 import java.util.ArrayList;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class MainActivity extends Activity implements LibraryView.Actions {
     private static final int PICK_ARCHIVE = 40;
+    private static final int CREATE_BACKUP = 41;
+    private static final int RESTORE_BACKUP = 42;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private ComicRepository repository;
     private LibraryView library;
     private AppLock appLock;
+    private ProgressDialog activeProgress;
+    private volatile boolean destroyed;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -59,14 +66,21 @@ public final class MainActivity extends Activity implements LibraryView.Actions 
     }
 
     @Override protected void onResume() { super.onResume(); if (repository != null) reload(); }
-    @Override protected void onDestroy() { worker.shutdownNow(); super.onDestroy(); }
+    @Override protected void onDestroy() {
+        destroyed = true;
+        if (activeProgress != null) activeProgress.dismiss();
+        if (library != null) library.close();
+        worker.shutdownNow();
+        super.onDestroy();
+    }
 
     private void reload() {
+        if (destroyed) return;
         worker.execute(() -> {
             java.util.List<Comic> items = repository.loadAll();
             long bytes = repository.totalBytes(items);
             List<String> collections = repository.loadCollections();
-            runOnUiThread(() -> library.setLibrary(items, bytes, collections));
+            runOnUiThreadSafely(() -> library.setLibrary(items, bytes, collections));
         });
     }
 
@@ -81,7 +95,16 @@ public final class MainActivity extends Activity implements LibraryView.Actions 
 
     @Override protected void onActivityResult(int code, int result, Intent data) {
         super.onActivityResult(code, result, data);
-        if (code != PICK_ARCHIVE || result != RESULT_OK || data == null) return;
+        if (result != RESULT_OK || data == null || data.getData() == null && data.getClipData() == null) return;
+        if (code == CREATE_BACKUP && data.getData() != null) {
+            exportBackup(data.getData());
+            return;
+        }
+        if (code == RESTORE_BACKUP && data.getData() != null) {
+            restoreBackup(data.getData());
+            return;
+        }
+        if (code != PICK_ARCHIVE) return;
         List<Uri> selected = new ArrayList<>();
         ClipData clips = data.getClipData();
         if (clips != null) {
@@ -103,26 +126,27 @@ public final class MainActivity extends Activity implements LibraryView.Actions 
         dialog.setMessage("正在读取压缩包…");
         dialog.setCancelable(false);
         dialog.show();
+        activeProgress = dialog;
         worker.execute(() -> {
             int success = 0; int pages = 0; List<String> failures = new ArrayList<>();
             for (int i = 0; i < uris.size(); i++) {
                 Uri uri = uris.get(i); String name = displayName(uri); int current = i + 1;
-                runOnUiThread(() -> dialog.setMessage("正在导入 " + current + "/" + uris.size() + "\n" + name));
+                runOnUiThreadSafely(() -> dialog.setMessage("正在导入 " + current + "/" + uris.size() + "\n" + name));
                 try {
                     Comic comic = repository.importArchive(uri, name, (message, count) ->
-                            runOnUiThread(() -> dialog.setMessage("正在导入 " + current + "/" + uris.size() + "\n" + name + " · " + count + " 页")));
+                            runOnUiThreadSafely(() -> dialog.setMessage("正在导入 " + current + "/" + uris.size() + "\n" + name + " · " + count + " 页")));
                     success++; pages += comic.pageCount();
                 } catch (Exception error) {
                     failures.add(name + "：" + error.getMessage());
                 }
             }
             int imported = success, totalPages = pages;
-            runOnUiThread(() -> finishBatchImport(dialog, uris.size(), imported, totalPages, failures));
+            runOnUiThreadSafely(() -> finishBatchImport(dialog, uris.size(), imported, totalPages, failures));
         });
     }
 
     private void finishBatchImport(ProgressDialog dialog, int total, int success, int pages, List<String> failures) {
-        dialog.dismiss(); reload();
+        dismissProgress(dialog); reload();
         if (failures.isEmpty()) {
             Toast.makeText(this, "已导入 " + success + " 本漫画，共 " + pages + " 页", Toast.LENGTH_LONG).show();
             return;
@@ -195,18 +219,19 @@ public final class MainActivity extends Activity implements LibraryView.Actions 
     private void mergeInBackground(Comic target, Comic sequel) {
         ProgressDialog dialog = new ProgressDialog(this); dialog.setTitle("正在合并漫画");
         dialog.setMessage("正在准备页面…"); dialog.setCancelable(false); dialog.show();
+        activeProgress = dialog;
         worker.execute(() -> {
             try {
                 Comic merged = repository.mergeComics(target.id, sequel.id, (copied, total) ->
-                        runOnUiThread(() -> dialog.setMessage("正在复制页面 " + copied + "/" + total)));
-                runOnUiThread(() -> {
-                    dialog.dismiss(); reload();
+                        runOnUiThreadSafely(() -> dialog.setMessage("正在复制页面 " + copied + "/" + total)));
+                runOnUiThreadSafely(() -> {
+                    dismissProgress(dialog); reload();
                     new AlertDialog.Builder(this).setTitle("合并完成")
                             .setMessage("《" + merged.title + "》现在共有 " + merged.pageCount() + " 页。\n\n续集《" + sequel.title + "》仍保留在书架中，核对页序后可手动删除。")
                             .setPositiveButton("知道了", null).show();
                 });
             } catch (Exception error) {
-                runOnUiThread(() -> { dialog.dismiss(); new AlertDialog.Builder(this).setTitle("合并失败")
+                runOnUiThreadSafely(() -> { dismissProgress(dialog); new AlertDialog.Builder(this).setTitle("合并失败")
                         .setMessage(error.getMessage() + "\n\n原漫画和续集均已保留。")
                         .setPositiveButton("知道了", null).show(); });
             }
@@ -228,7 +253,7 @@ public final class MainActivity extends Activity implements LibraryView.Actions 
                 .setMessage("解压后的图片和阅读进度将从本机永久删除。")
                 .setNegativeButton("取消", null)
                 .setPositiveButton("删除", (d, w) -> worker.execute(() -> {
-                    repository.delete(comic); runOnUiThread(this::reload);
+                    repository.delete(comic); runOnUiThreadSafely(this::reload);
                 })).show();
     }
 
@@ -317,15 +342,121 @@ public final class MainActivity extends Activity implements LibraryView.Actions 
 
     @Override public void showInfo() {
         new AlertDialog.Builder(this).setTitle("漫匣")
-                .setItems(new String[]{"密码设置", "功能介绍", "关于本软件"}, (dialog, which) -> {
+                .setItems(new String[]{"密码设置", "书架备份与恢复", "功能介绍", "关于本软件"}, (dialog, which) -> {
                     if (which == 0) showPasswordSettings();
-                    else if (which == 1) showOnboarding(); else showAbout();
+                    else if (which == 1) showBackupOptions();
+                    else if (which == 2) showOnboarding(); else showAbout();
                 }).show();
+    }
+
+    private void showBackupOptions() {
+        new AlertDialog.Builder(this).setTitle("书架备份与恢复")
+                .setItems(new String[]{"导出完整书架备份", "从备份恢复书架"}, (dialog, which) -> {
+                    if (which == 0) confirmCreateBackup();
+                    else confirmRestoreBackup();
+                })
+                .setNegativeButton("取消", null).show();
+    }
+
+    private void confirmCreateBackup() {
+        new AlertDialog.Builder(this).setTitle("导出完整书架备份？")
+                .setMessage("备份包含漫画图片、标题、合集、收藏和阅读进度，不包含应用密码。备份文件未加密，请保存到安全位置。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("选择保存位置", (dialog, which) -> createBackupDocument()).show();
+    }
+
+    private void createBackupDocument() {
+        String timestamp = new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date());
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("application/zip");
+        intent.putExtra(Intent.EXTRA_TITLE, "MangaShelf-backup-" + timestamp + ".zip");
+        startActivityForResult(intent, CREATE_BACKUP);
+    }
+
+    private void confirmRestoreBackup() {
+        new AlertDialog.Builder(this).setTitle("从备份恢复书架？")
+                .setMessage("备份中的漫画会新增到当前书架，不会覆盖已有漫画。重复恢复同一备份会产生副本；应用密码不会恢复。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("选择备份文件", (dialog, which) -> pickBackupDocument()).show();
+    }
+
+    private void pickBackupDocument() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("application/zip");
+        intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"application/zip", "application/octet-stream"});
+        startActivityForResult(intent, RESTORE_BACKUP);
+    }
+
+    private void exportBackup(Uri destination) {
+        ProgressDialog dialog = showProgress("正在导出书架", "正在准备备份…");
+        worker.execute(() -> {
+            try {
+                repository.exportBackup(destination, (message, current, total) -> runOnUiThreadSafely(() ->
+                        dialog.setMessage(message + " " + current + "/" + Math.max(current, total))));
+                runOnUiThreadSafely(() -> {
+                    dismissProgress(dialog);
+                    Toast.makeText(this, "书架备份已保存", Toast.LENGTH_LONG).show();
+                });
+            } catch (Exception error) {
+                runOnUiThreadSafely(() -> showBackupError(dialog, "备份失败", error));
+            }
+        });
+    }
+
+    private void restoreBackup(Uri source) {
+        ProgressDialog dialog = showProgress("正在恢复书架", "正在检查备份…");
+        worker.execute(() -> {
+            try {
+                ComicRepository.RestoreResult result = repository.restoreBackup(source, (message, current, total) ->
+                        runOnUiThreadSafely(() -> dialog.setMessage(message + " " + current + " 页")));
+                runOnUiThreadSafely(() -> {
+                    dismissProgress(dialog);
+                    reload();
+                    new AlertDialog.Builder(this).setTitle("书架恢复完成")
+                            .setMessage("已恢复 " + result.comics + " 本漫画，共 " + result.pages + " 页。")
+                            .setPositiveButton("知道了", null).show();
+                });
+            } catch (Exception error) {
+                runOnUiThreadSafely(() -> showBackupError(dialog, "恢复失败", error));
+            }
+        });
+    }
+
+    private ProgressDialog showProgress(String title, String message) {
+        ProgressDialog dialog = new ProgressDialog(this);
+        dialog.setTitle(title);
+        dialog.setMessage(message);
+        dialog.setCancelable(false);
+        dialog.show();
+        activeProgress = dialog;
+        return dialog;
+    }
+
+    private void showBackupError(ProgressDialog dialog, String title, Exception error) {
+        dismissProgress(dialog);
+        String message = error.getMessage();
+        if (message == null || message.trim().isEmpty()) message = "发生未知错误，请重试。";
+        new AlertDialog.Builder(this).setTitle(title).setMessage(message)
+                .setPositiveButton("知道了", null).show();
+    }
+
+    private void dismissProgress(ProgressDialog dialog) {
+        if (dialog != null && dialog.isShowing()) dialog.dismiss();
+        if (activeProgress == dialog) activeProgress = null;
+    }
+
+    private void runOnUiThreadSafely(Runnable action) {
+        runOnUiThread(() -> {
+            if (destroyed || isFinishing() || isDestroyed()) return;
+            action.run();
+        });
     }
 
     private void showAbout() {
         new AlertDialog.Builder(this).setTitle("漫匣 · 本地漫画")
-                .setMessage("支持一次选择多个 ZIP / CBZ 漫画包。导入后图片会安全解压到应用私有目录，全程离线，不申请存储权限，也不会上传任何内容。\n\n点击漫画开始阅读；点击右侧 ⋮ 可收藏、重命名或删除。")
+                .setMessage("支持一次选择多个 ZIP / CBZ 漫画包。导入后图片会安全解压到应用私有目录，全程离线，不申请存储权限，也不会上传任何内容。\n\n点击漫画开始阅读；点击右侧 ⋮ 可收藏、重命名或删除。右上角菜单可导出或恢复完整书架备份。")
                 .setPositiveButton("知道了", null).show();
     }
 
