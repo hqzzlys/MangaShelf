@@ -1,6 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.localmanga.shelf">
-    <application android:allowBackup="true" android:icon="@drawable/app_cover" android:roundIcon="@drawable/app_cover" android:label="漫匣" android:theme="@style/AppTheme" android:usesCleartextTraffic="false">
+    <application
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@drawable/app_cover"
+        android:roundIcon="@drawable/app_cover"
+        android:label="漫匣"
+        android:theme="@style/AppTheme"
+        android:usesCleartextTraffic="false">
         <activity android:name=".ReaderActivity" android:configChanges="orientation|screenSize" android:screenOrientation="unspecified" />
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>

@@ -265,7 +265,9 @@ public final class LibraryView extends FrameLayout {
 
     private TextView label(String text, int size, int color, boolean bold) {
         TextView v = new TextView(getContext()); v.setText(text); v.setTextSize(size); v.setTextColor(color);
-        v.setTypeface(android.graphics.Typeface.create("sans", bold ? 1 : 0)); v.setGravity(Gravity.CENTER_VERTICAL);
+        v.setTypeface(android.graphics.Typeface.create("sans", bold
+                ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL));
+        v.setGravity(Gravity.CENTER_VERTICAL);
         v.setMaxLines(2); v.setEllipsize(android.text.TextUtils.TruncateAt.END); return v;
     }
     private TextView center(String text, int size, int color, boolean bold) {

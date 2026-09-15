@@ -102,7 +102,9 @@ public final class OnboardingView extends FrameLayout {
 
     private TextView text(String value, int size, int color, boolean bold) {
         TextView view = new TextView(getContext()); view.setText(value); view.setTextSize(size); view.setTextColor(color);
-        view.setTypeface(android.graphics.Typeface.create("sans", bold ? 1 : 0)); return view;
+        view.setTypeface(android.graphics.Typeface.create("sans", bold
+                ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL));
+        return view;
     }
 
     private GradientDrawable round(int color, int radius) {
