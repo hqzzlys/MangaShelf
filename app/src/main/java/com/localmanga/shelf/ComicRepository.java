@@ -25,6 +25,16 @@ import java.util.zip.ZipInputStream;
 public final class ComicRepository {
     public interface Progress { void onProgress(String message, int count); }
     public interface MergeProgress { void onProgress(int copiedPages, int totalPages); }
+    public interface BackupProgress { void onProgress(String message, int current, int total); }
+    public static final class RestoreResult {
+        public final int comics;
+        public final int pages;
+
+        RestoreResult(int comics, int pages) {
+            this.comics = comics;
+            this.pages = pages;
+        }
+    }
     private static final String PREFS = "comic_library_v1";
     private static final String COLLECTIONS = "collections";
     private static final long MAX_UNCOMPRESSED = 2L * 1024L * 1024L * 1024L;
@@ -58,7 +68,7 @@ public final class ComicRepository {
         File[] dirs = root.listFiles(file -> file.isDirectory() && !file.getName().startsWith("."));
         if (dirs == null) return result;
         for (File dir : dirs) {
-            List<File> pages = scanImages(dir);
+            List<File> pages = ArchiveUtils.scanImages(dir);
             if (pages.isEmpty()) continue;
             String id = dir.getName();
             result.add(new Comic(id, prefs.getString(id + ".title", id), dir, pages,
@@ -75,6 +85,14 @@ public final class ComicRepository {
         return null;
     }
 
+    public synchronized void exportBackup(Uri destination, BackupProgress progress) throws IOException {
+        LibraryBackup.exportLibrary(context, prefs, loadAll(), destination, progress);
+    }
+
+    public synchronized RestoreResult restoreBackup(Uri source, BackupProgress progress) throws IOException {
+        return LibraryBackup.restoreLibrary(context, prefs, root, source, progress);
+    }
+
     public Comic importArchive(Uri uri, String displayName, Progress callback) throws IOException {
         String cleanTitle = stripExtension(displayName == null ? "新漫画" : displayName).trim();
         if (cleanTitle.isEmpty()) cleanTitle = "新漫画";
@@ -88,10 +106,10 @@ public final class ComicRepository {
             try (ZipInputStream zip = new ZipInputStream(new BufferedInputStream(raw))) {
                 ZipEntry entry; byte[] buffer = new byte[64 * 1024];
                 while ((entry = zip.getNextEntry()) != null) {
-                    if (entry.isDirectory() || !isImage(entry.getName())) { zip.closeEntry(); continue; }
+                    if (entry.isDirectory() || !ArchiveUtils.isImage(entry.getName())) { zip.closeEntry(); continue; }
                     if (++files > MAX_FILES) throw new IOException("压缩包文件过多（上限 10000）");
-                    String ext = extension(entry.getName());
-                    String relative = sanitizePath(entry.getName());
+                    String ext = ArchiveUtils.extension(entry.getName());
+                    String relative = ArchiveUtils.sanitizeArchivePath(entry.getName());
                     if (relative.isEmpty()) relative = String.format(Locale.US, "%06d.%s", files, ext);
                     while (!seen.add(relative.toLowerCase(Locale.ROOT))) relative = String.format(Locale.US, "%06d.%s", files, ext);
                     File out = new File(destination, relative);
@@ -122,7 +140,7 @@ public final class ComicRepository {
         }
         long now = System.currentTimeMillis();
         prefs.edit().putString(id + ".title", cleanTitle).putLong(id + ".imported", now).apply();
-        return new Comic(id, cleanTitle, destination, scanImages(destination), 0, now, 0L, false, "");
+        return new Comic(id, cleanTitle, destination, ArchiveUtils.scanImages(destination), 0, now, 0L, false, "");
     }
 
     public void saveProgress(String id, int page) {
@@ -188,11 +206,11 @@ public final class ComicRepository {
         try {
             int copied = 0;
             for (File page : ordered) {
-                File output = new File(temporary, String.format(Locale.US, "%08d.%s", copied + 1, extension(page.getName())));
+                File output = new File(temporary, String.format(Locale.US, "%08d.%s", copied + 1, ArchiveUtils.extension(page.getName())));
                 copyFile(page, output); copied++;
                 if (progress != null) progress.onProgress(copied, total);
             }
-            if (scanImages(temporary).size() != total) throw new IOException("合并后的页数校验失败");
+            if (ArchiveUtils.scanImages(temporary).size() != total) throw new IOException("合并后的页数校验失败");
             if (!target.directory.renameTo(backup)) throw new IOException("无法暂存原漫画，未修改任何文件");
             if (!temporary.renameTo(target.directory)) throw new IOException("无法替换合并结果");
             Comic merged = load(target.id);
@@ -233,46 +251,6 @@ public final class ComicRepository {
         long total = 0; for (Comic comic : comics) for (File page : comic.pages) total += page.length(); return total;
     }
 
-    private static List<File> scanImages(File directory) {
-        List<File> files = new ArrayList<>(); collect(directory, files);
-        Collator collator = Collator.getInstance(Locale.CHINA);
-        files.sort((a, b) -> naturalCompare(a.getAbsolutePath(), b.getAbsolutePath(), collator)); return files;
-    }
-    private static void collect(File dir, List<File> out) {
-        File[] children = dir.listFiles(); if (children == null) return;
-        for (File child : children) { if (child.isDirectory()) collect(child, out); else if (isImage(child.getName())) out.add(child); }
-    }
-    private static int naturalCompare(String a, String b, Collator collator) {
-        int ia = 0, ib = 0;
-        while (ia < a.length() && ib < b.length()) {
-            char ca = a.charAt(ia), cb = b.charAt(ib);
-            if (Character.isDigit(ca) && Character.isDigit(cb)) {
-                long na = 0, nb = 0;
-                while (ia < a.length() && Character.isDigit(a.charAt(ia))) na = Math.min(Long.MAX_VALUE / 10, na) * 10 + a.charAt(ia++) - '0';
-                while (ib < b.length() && Character.isDigit(b.charAt(ib))) nb = Math.min(Long.MAX_VALUE / 10, nb) * 10 + b.charAt(ib++) - '0';
-                if (na != nb) return Long.compare(na, nb);
-            } else {
-                int sa = ia, sb = ib; while (ia < a.length() && !Character.isDigit(a.charAt(ia))) ia++;
-                while (ib < b.length() && !Character.isDigit(b.charAt(ib))) ib++;
-                int cmp = collator.compare(a.substring(sa, ia), b.substring(sb, ib)); if (cmp != 0) return cmp;
-            }
-        }
-        return Integer.compare(a.length(), b.length());
-    }
-    private static boolean isImage(String name) {
-        String x = name.toLowerCase(Locale.ROOT);
-        return x.endsWith(".jpg") || x.endsWith(".jpeg") || x.endsWith(".png") || x.endsWith(".webp") || x.endsWith(".gif") || x.endsWith(".bmp");
-    }
-    private static String extension(String name) { int dot = name.lastIndexOf('.'); return dot < 0 ? "jpg" : name.substring(dot + 1).toLowerCase(Locale.ROOT); }
-    private static String sanitizePath(String path) {
-        String[] parts = path.replace('\\', '/').split("/"); StringBuilder out = new StringBuilder();
-        for (String part : parts) {
-            if (part.isEmpty() || part.equals(".") || part.equals("..") || part.startsWith("__MACOSX")) continue;
-            String safe = part.replaceAll("[<>:\"|?*\\x00-\\x1F]", "_");
-            if (out.length() > 0) out.append(File.separator); out.append(safe);
-        }
-        return out.toString();
-    }
     private static String stripExtension(String name) { int dot = name.lastIndexOf('.'); return dot > 0 ? name.substring(0, dot) : name; }
     private static void deleteRecursive(File file) {
         if (file == null || !file.exists()) return;

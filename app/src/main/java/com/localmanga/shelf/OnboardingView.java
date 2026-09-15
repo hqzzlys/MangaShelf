@@ -1,5 +1,6 @@
 package com.localmanga.shelf;
 
+import android.annotation.SuppressLint;
 import android.content.Context;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
@@ -10,6 +11,7 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+@SuppressLint("ViewConstructor")
 public final class OnboardingView extends FrameLayout {
     public interface Listener { void onFinish(boolean importNow); }
 
@@ -57,6 +59,7 @@ public final class OnboardingView extends FrameLayout {
         LinearLayout brandRow = new LinearLayout(context); brandRow.setGravity(Gravity.CENTER_VERTICAL);
         ImageView brand = new ImageView(context); brand.setImageResource(R.drawable.app_cover);
         brand.setScaleType(ImageView.ScaleType.CENTER_CROP); brand.setBackground(round(Color.WHITE, 12));
+        brand.setContentDescription(getResources().getString(R.string.app_name));
         brand.setClipToOutline(true); brandRow.addView(brand, lp(dp(42), dp(42)));
         TextView brandName = text("漫匣", 20, 0xFF24201D, true); brandName.setPadding(dp(11), 0, 0, 0);
         brandRow.addView(brandName, lp(-2, dp(42))); root.addView(brandRow, lp(-1, dp(50)));

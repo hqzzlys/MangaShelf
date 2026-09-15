@@ -1,5 +1,6 @@
 package com.localmanga.shelf;
 
+import android.annotation.SuppressLint;
 import android.app.AlertDialog;
 import android.content.Context;
 import android.graphics.Color;
@@ -16,6 +17,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
+@SuppressLint("ViewConstructor")
 public final class LibraryView extends FrameLayout {
     public interface Actions {
         void importComic(); void openComic(Comic comic); void manageComic(Comic comic);
@@ -30,6 +32,7 @@ public final class LibraryView extends FrameLayout {
     private final LinearLayout collectionList;
     private final LinearLayout comicList;
     private final TextView search;
+    private final CoverLoader coverLoader = new CoverLoader();
     private TextView sortButton;
     private List<Comic> all = new ArrayList<>();
     private List<String> collectionNames = new ArrayList<>();
@@ -81,6 +84,7 @@ public final class LibraryView extends FrameLayout {
         refresh();
     }
     public void setQuery(String value) { query = value == null ? "" : value.trim(); refresh(); }
+    public void close() { coverLoader.close(); }
 
     private LinearLayout hero() {
         LinearLayout hero = new LinearLayout(getContext()); hero.setOrientation(LinearLayout.VERTICAL);
@@ -107,7 +111,7 @@ public final class LibraryView extends FrameLayout {
         row.setPadding(dp(20), 0, dp(20), 0);
         TextView heading = label(left, 18, 0xFF24212B, true);
         row.addView(heading, new LinearLayout.LayoutParams(0, dp(34), 1));
-        TextView more = label(right, 13, 0xFF8B8693, false); more.setGravity(Gravity.RIGHT | Gravity.CENTER_VERTICAL);
+        TextView more = label(right, 13, 0xFF8B8693, false); more.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
         if (click != null) { more.setOnClickListener(click); sortButton = more; }
         row.addView(more, lp(dp(126), dp(34))); content.addView(row, lp(-1, dp(42))); return heading;
     }
@@ -205,7 +209,7 @@ public final class LibraryView extends FrameLayout {
         String[] choices = {"最近更新", "漫画名称", "阅读进度"};
         new AlertDialog.Builder(getContext()).setTitle("书架排序")
                 .setSingleChoiceItems(choices, sortMode, (dialog, which) -> {
-                    sortMode = which; sortButton.setText(choices[which] + "⌄");
+                    sortMode = which; sortButton.setText(getResources().getString(R.string.sort_label, choices[which]));
                     rebuildComics(); dialog.dismiss();
                 }).setNegativeButton("取消", null).show();
     }
@@ -226,7 +230,7 @@ public final class LibraryView extends FrameLayout {
         LinearLayout row = new LinearLayout(getContext()); row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(10), dp(9), dp(7), dp(9)); row.setBackground(round(Color.WHITE, 16));
         ImageView cover = new ImageView(getContext()); cover.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        if (comic.cover() != null) cover.setImageURI(android.net.Uri.fromFile(comic.cover()));
+        coverLoader.load(comic.cover(), cover, dp(68), dp(96));
         cover.setBackground(round(0xFFFFEBDD, 10)); row.addView(cover, lp(dp(68), dp(96)));
 
         LinearLayout words = new LinearLayout(getContext()); words.setOrientation(LinearLayout.VERTICAL); words.setPadding(dp(14), 0, dp(8), 0);
@@ -259,7 +263,7 @@ public final class LibraryView extends FrameLayout {
     private void buildFab() {
         TextView fab = center("+", 34, Color.WHITE, false); fab.setGravity(Gravity.CENTER); fab.setBackground(round(ORANGE, 32));
         fab.setElevation(dp(10)); fab.setOnClickListener(v -> actions.importComic());
-        FrameLayout.LayoutParams pos = new FrameLayout.LayoutParams(dp(62), dp(62), Gravity.RIGHT | Gravity.BOTTOM);
+        FrameLayout.LayoutParams pos = new FrameLayout.LayoutParams(dp(62), dp(62), Gravity.END | Gravity.BOTTOM);
         pos.setMargins(0, 0, dp(22), dp(22)); addView(fab, pos);
     }
 
