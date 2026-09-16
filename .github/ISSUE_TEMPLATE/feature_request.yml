@@ -1,0 +1,28 @@
+name: 功能建议
+description: 提议新的功能或体验改进
+title: "[Feature] "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 要解决的问题
+      description: 描述当前场景和困难，不要只写方案名称。
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议方案
+    validations:
+      required: true
+  - type: dropdown
+    id: data
+    attributes:
+      label: 是否影响现有漫画或备份格式
+      options:
+        - 不影响
+        - 可能影响，需要迁移方案
+        - 不确定
+    validations:
+      required: true

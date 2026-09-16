@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="manga_orange">#F47B20</color>
+    <color name="manga_background">#FFFAF5</color>
+    <color name="manga_surface">#FFFCF8</color>
+    <color name="manga_text_primary">#24212B</color>
+    <color name="manga_text_secondary">#756F80</color>
+    <color name="reader_background">#000000</color>
+</resources>

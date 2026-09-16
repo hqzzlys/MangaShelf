@@ -1,14 +1,31 @@
 plugins { id 'com.android.application' }
 
+def releaseStoreFile = System.getenv('MANGASHELF_KEYSTORE_PATH')
+
 android {
-    namespace 'com.localmanga.shelf'
-    compileSdk 35
+    namespace = 'com.localmanga.shelf'
+    compileSdk = 37
     defaultConfig {
-        applicationId 'com.localmanga.shelf'
-        minSdk 26
-        targetSdk 35
-        versionCode 11
-        versionName '1.1.0'
+        applicationId = 'com.localmanga.shelf'
+        minSdk = 26
+        targetSdk = 37
+        versionCode = 12
+        versionName = '1.2.0'
+    }
+    signingConfigs {
+        release {
+            if (releaseStoreFile) {
+                storeFile = file(releaseStoreFile)
+                storePassword = System.getenv('MANGASHELF_STORE_PASSWORD')
+                keyAlias = System.getenv('MANGASHELF_KEY_ALIAS')
+                keyPassword = System.getenv('MANGASHELF_KEY_PASSWORD')
+            }
+        }
+    }
+    buildTypes {
+        release {
+            if (releaseStoreFile) signingConfig = signingConfigs.release
+        }
     }
 }
 

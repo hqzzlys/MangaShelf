@@ -27,6 +27,7 @@ final class CoverLoader {
         if (file == null || closed) return;
         String path = file.getAbsolutePath();
         view.setTag(path);
+        view.setImageDrawable(null);
         Bitmap cached = cache.get(path);
         if (cached != null && !cached.isRecycled()) {
             view.setImageBitmap(cached);

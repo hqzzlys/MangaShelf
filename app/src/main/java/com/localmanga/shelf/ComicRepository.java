@@ -2,6 +2,7 @@ package com.localmanga.shelf;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.graphics.BitmapFactory;
 import android.net.Uri;
 
 import java.io.BufferedInputStream;
@@ -11,6 +12,7 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InterruptedIOException;
 import java.text.Collator;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -19,8 +21,6 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
 
 public final class ComicRepository {
     public interface Progress { void onProgress(String message, int count); }
@@ -37,25 +37,26 @@ public final class ComicRepository {
     }
     private static final String PREFS = "comic_library_v1";
     private static final String COLLECTIONS = "collections";
-    private static final long MAX_UNCOMPRESSED = 2L * 1024L * 1024L * 1024L;
-    private static final int MAX_FILES = 10000;
     private final Context context;
     private final SharedPreferences prefs;
     private final File root;
+    private final MergeTransaction mergeTransaction;
 
     public ComicRepository(Context context) {
         this.context = context.getApplicationContext();
         prefs = this.context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         root = new File(this.context.getFilesDir(), "comics");
         if (!root.exists()) root.mkdirs();
+        mergeTransaction = new MergeTransaction(root, new PreferencesMergeStore(prefs));
         recoverInterruptedMerges();
     }
 
     private void recoverInterruptedMerges() {
+        mergeTransaction.recover();
         File[] directories = root.listFiles(File::isDirectory); if (directories == null) return;
         for (File directory : directories) {
             String name = directory.getName();
-            if (name.startsWith(".merge_")) deleteRecursive(directory);
+            if (name.startsWith(".merge_") || name.startsWith(".import_") || name.startsWith(".restore_")) deleteRecursive(directory);
             else if (name.startsWith(".backup_")) {
                 File original = new File(root, name.substring(".backup_".length()));
                 if (original.exists()) deleteRecursive(directory); else directory.renameTo(original);
@@ -68,21 +69,28 @@ public final class ComicRepository {
         File[] dirs = root.listFiles(file -> file.isDirectory() && !file.getName().startsWith("."));
         if (dirs == null) return result;
         for (File dir : dirs) {
-            List<File> pages = ArchiveUtils.scanImages(dir);
-            if (pages.isEmpty()) continue;
-            String id = dir.getName();
-            result.add(new Comic(id, prefs.getString(id + ".title", id), dir, pages,
-                    Math.min(prefs.getInt(id + ".progress", 0), pages.size() - 1),
-                    prefs.getLong(id + ".imported", dir.lastModified()), prefs.getLong(id + ".lastRead", 0L),
-                    prefs.getBoolean(id + ".favorite", false), prefs.getString(id + ".collection", "")));
+            Comic comic = loadDirectory(dir);
+            if (comic != null) result.add(comic);
         }
         result.sort((a, b) -> Long.compare(Math.max(b.lastRead, b.importedAt), Math.max(a.lastRead, a.importedAt)));
         return result;
     }
 
     public synchronized Comic load(String id) {
-        for (Comic comic : loadAll()) if (comic.id.equals(id)) return comic;
-        return null;
+        if (!ArchiveUtils.isSafeBackupId(id)) return null;
+        return loadDirectory(new File(root, id));
+    }
+
+    private Comic loadDirectory(File dir) {
+        if (dir == null || !dir.isDirectory() || dir.getName().startsWith(".")) return null;
+        List<File> pages = ArchiveUtils.scanImages(dir);
+        if (pages.isEmpty()) return null;
+        String id = dir.getName();
+        int savedProgress = prefs.getInt(id + ".progress", -1);
+        int progress = Math.max(-1, Math.min(savedProgress, pages.size() - 1));
+        return new Comic(id, prefs.getString(id + ".title", id), dir, pages, progress,
+                prefs.getLong(id + ".imported", dir.lastModified()), prefs.getLong(id + ".lastRead", 0L),
+                prefs.getBoolean(id + ".favorite", false), prefs.getString(id + ".collection", ""));
     }
 
     public synchronized void exportBackup(Uri destination, BackupProgress progress) throws IOException {
@@ -98,49 +106,30 @@ public final class ComicRepository {
         if (cleanTitle.isEmpty()) cleanTitle = "新漫画";
         String id = System.currentTimeMillis() + "-" + UUID.randomUUID().toString().substring(0, 8);
         File destination = new File(root, id);
-        if (!destination.mkdirs()) throw new IOException("无法创建漫画目录");
-        long total = 0L; int imageCount = 0; int files = 0;
-        Set<String> seen = new HashSet<>();
+        File temporary = new File(root, ".import_" + id);
+        if (!temporary.mkdirs()) throw new IOException("无法创建漫画目录");
+        int imageCount;
         try (InputStream raw = context.getContentResolver().openInputStream(uri)) {
             if (raw == null) throw new IOException("无法读取所选文件");
-            try (ZipInputStream zip = new ZipInputStream(new BufferedInputStream(raw))) {
-                ZipEntry entry; byte[] buffer = new byte[64 * 1024];
-                while ((entry = zip.getNextEntry()) != null) {
-                    if (entry.isDirectory() || !ArchiveUtils.isImage(entry.getName())) { zip.closeEntry(); continue; }
-                    if (++files > MAX_FILES) throw new IOException("压缩包文件过多（上限 10000）");
-                    String ext = ArchiveUtils.extension(entry.getName());
-                    String relative = ArchiveUtils.sanitizeArchivePath(entry.getName());
-                    if (relative.isEmpty()) relative = String.format(Locale.US, "%06d.%s", files, ext);
-                    while (!seen.add(relative.toLowerCase(Locale.ROOT))) relative = String.format(Locale.US, "%06d.%s", files, ext);
-                    File out = new File(destination, relative);
-                    String rootPath = destination.getCanonicalPath() + File.separator;
-                    if (!out.getCanonicalPath().startsWith(rootPath)) throw new IOException("压缩包包含不安全路径");
-                    File parent = out.getParentFile(); if (parent != null && !parent.exists()) parent.mkdirs();
-                    try (BufferedOutputStream target = new BufferedOutputStream(new FileOutputStream(out))) {
-                        int read;
-                        while ((read = zip.read(buffer)) != -1) {
-                            total += read;
-                            if (total > MAX_UNCOMPRESSED) throw new IOException("解压内容超过 2 GB 安全上限");
-                            target.write(buffer, 0, read);
-                        }
-                    }
-                    imageCount++;
-                    if (callback != null && imageCount % 4 == 0) callback.onProgress("正在整理图片…", imageCount);
-                    zip.closeEntry();
-                }
-            }
+            imageCount = ArchiveExtractor.extract(raw, temporary,
+                    count -> { if (callback != null) callback.onProgress("正在整理图片…", count); },
+                    ComicRepository::isDecodableImage);
         } catch (Exception e) {
-            deleteRecursive(destination);
+            deleteRecursive(temporary);
             if (e instanceof IOException) throw (IOException) e;
             throw new IOException("导入失败：" + e.getMessage(), e);
         }
         if (imageCount == 0) {
-            deleteRecursive(destination);
+            deleteRecursive(temporary);
             throw new IOException("压缩包中没有找到 JPG、PNG、WEBP、GIF 或 BMP 图片");
+        }
+        if (!temporary.renameTo(destination)) {
+            deleteRecursive(temporary);
+            throw new IOException("无法提交导入结果，请重试");
         }
         long now = System.currentTimeMillis();
         prefs.edit().putString(id + ".title", cleanTitle).putLong(id + ".imported", now).apply();
-        return new Comic(id, cleanTitle, destination, ArchiveUtils.scanImages(destination), 0, now, 0L, false, "");
+        return new Comic(id, cleanTitle, destination, ArchiveUtils.scanImages(destination), -1, now, 0L, false, "");
     }
 
     public void saveProgress(String id, int page) {
@@ -202,37 +191,52 @@ public final class ComicRepository {
         File backup = new File(root, ".backup_" + target.id);
         deleteRecursive(temporary); deleteRecursive(backup);
         if (!temporary.mkdirs()) throw new IOException("无法创建合并临时目录");
+        if (!mergeTransaction.begin(target.directory, temporary, backup)) {
+            deleteRecursive(temporary);
+            throw new IOException("无法保存合并事务状态");
+        }
         List<File> ordered = new ArrayList<>(target.pages); ordered.addAll(sequel.pages);
         try {
             int copied = 0;
             for (File page : ordered) {
+                if (Thread.currentThread().isInterrupted()) throw new InterruptedIOException("操作已取消");
                 File output = new File(temporary, String.format(Locale.US, "%08d.%s", copied + 1, ArchiveUtils.extension(page.getName())));
                 copyFile(page, output); copied++;
                 if (progress != null) progress.onProgress(copied, total);
             }
             if (ArchiveUtils.scanImages(temporary).size() != total) throw new IOException("合并后的页数校验失败");
             if (!target.directory.renameTo(backup)) throw new IOException("无法暂存原漫画，未修改任何文件");
+            if (!mergeTransaction.markBackedUp()) throw new IOException("无法保存合并事务状态");
             if (!temporary.renameTo(target.directory)) throw new IOException("无法替换合并结果");
+            if (!mergeTransaction.markReplaced()) throw new IOException("无法保存合并事务状态");
             Comic merged = load(target.id);
             if (merged == null || merged.pageCount() != total) throw new IOException("合并结果页数校验失败");
             previousSources.add(sequel.id);
-            prefs.edit().putStringSet(target.id + ".mergedSources", previousSources).apply();
-            deleteRecursive(backup);
+            if (!mergeTransaction.commitMergedSources(target.id, previousSources)) throw new IOException("无法提交合并元数据");
+            mergeTransaction.finish();
             return merged;
         } catch (IOException error) {
-            if (backup.exists()) {
-                if (target.directory.exists()) deleteRecursive(target.directory);
-                backup.renameTo(target.directory);
-            }
-            deleteRecursive(temporary); throw error;
+            mergeTransaction.rollback();
+            throw error;
         }
+    }
+
+    private static boolean isDecodableImage(File file) {
+        if (file == null || !file.isFile() || file.length() == 0L) return false;
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        BitmapFactory.decodeFile(file.getAbsolutePath(), bounds);
+        return bounds.outWidth > 0 && bounds.outHeight > 0;
     }
 
     private static void copyFile(File source, File destination) throws IOException {
         byte[] buffer = new byte[64 * 1024];
         try (BufferedInputStream input = new BufferedInputStream(new FileInputStream(source));
              BufferedOutputStream output = new BufferedOutputStream(new FileOutputStream(destination))) {
-            int read; while ((read = input.read(buffer)) != -1) output.write(buffer, 0, read);
+            int read; while ((read = input.read(buffer)) != -1) {
+                if (Thread.currentThread().isInterrupted()) throw new InterruptedIOException("操作已取消");
+                output.write(buffer, 0, read);
+            }
         }
         if (destination.length() != source.length()) throw new IOException("复制页面失败：" + source.getName());
     }

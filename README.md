@@ -8,9 +8,9 @@
 
 ## 版本信息
 
-- 当前版本：`v1.1.0`
+- 当前版本：`v1.2.0`
 - Android 要求：Android 8.0（API 26）及以上
-- 目标平台：Android 15（API 35）
+- 目标平台：Android API 37
 - 应用包名：`com.localmanga.shelf`
 - 技术栈：原生 Java + Android SDK
 
@@ -69,6 +69,7 @@
 - 支持左右滑动翻页。
 - 自动保存每本漫画的阅读位置。
 - 支持亮度调节、图片适应方式与屏幕旋转控制。
+- 可在阅读设置中切换从左向右或从右向左翻页。
 
 ### 应用密码
 
@@ -88,7 +89,7 @@
 
 ## 安装
 
-1. 在 GitHub Releases 下载 `MangaShelf-v1.1.0.apk`。
+1. 在 [最新 Release](https://github.com/hqzzlys/MangaShelf/releases/latest) 下载 APK。
 2. 在 Android 手机上打开 APK。
 3. 若系统提示，请允许当前文件管理器或浏览器“安装未知应用”。
 4. 安装后启动“漫匣”，按首次引导导入漫画。
@@ -140,9 +141,9 @@
 ### 环境要求
 
 - JDK 17
-- Android SDK 35
+- Android SDK 37
 - Android Build Tools 35.x
-- Gradle 8.x
+- Gradle Wrapper（仓库已包含，无需单独安装 Gradle）
 
 ### Android Studio
 
@@ -151,6 +152,22 @@
 3. 等待 Gradle 同步完成。
 4. 选择 `Build > Build APK(s)`。
 
+### 命令行验证
+
+Windows：
+
+```powershell
+.\gradlew.bat testDebugUnitTest lintDebug assembleDebug
+```
+
+macOS / Linux：
+
+```bash
+./gradlew testDebugUnitTest lintDebug assembleDebug
+```
+
+Debug APK 会生成在 `app/build/outputs/apk/debug/`。每个拉取请求也会运行相同质量检查，并把 Debug APK 上传为 GitHub Actions 构建产物。
+
 项目无第三方运行时依赖，核心界面、导入、解压、书架和阅读器均使用 Android 原生 API 实现。
 
 ## 项目结构
@@ -158,9 +175,14 @@
 ```text
 app/src/main/
 ├── java/com/localmanga/shelf/
-│   ├── MainActivity.java       # 书架、导入和漫画管理
+│   ├── MainActivity.java       # 书架与漫画管理入口
 │   ├── ReaderActivity.java     # 漫画阅读器
-│   ├── ComicRepository.java    # 解压、存储与合并事务
+│   ├── LibraryTaskController.java # 可跨旋转保留的后台任务
+│   ├── ComicRepository.java    # 漫画存储与元数据入口
+│   ├── ArchiveExtractor.java   # ZIP / CBZ 安全解包
+│   ├── ArchiveLimits.java      # 解包资源限制
+│   ├── MergeTransaction.java   # 合并崩溃恢复事务
+│   ├── NaturalPageSorter.java  # 漫画页自然排序
 │   ├── AppLock.java            # 应用密码
 │   ├── LibraryView.java        # 书架界面
 │   └── OnboardingView.java     # 首次启动引导
@@ -170,6 +192,16 @@ app/src/main/
 ## 版本历史
 
 详见 [CHANGELOG.md](CHANGELOG.md)。
+
+## 参与贡献与安全报告
+
+- 开发环境、提交要求和拉取请求流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+- 安全问题请按 [SECURITY.md](SECURITY.md) 私下报告，不要在公开 Issue 中披露漏洞细节。
+- 每个正式版本由标签工作流构建，并附带 APK 校验和与 GitHub Artifact Attestation。
+
+## 开源许可证
+
+本项目采用 [Apache License 2.0](LICENSE) 开源许可证。
 
 ## 注意事项
 

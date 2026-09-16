@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="minimum_touch_target">48dp</dimen>
+    <dimen name="screen_horizontal_padding">20dp</dimen>
+    <dimen name="comic_cover_width">68dp</dimen>
+    <dimen name="comic_cover_height">96dp</dimen>
+    <dimen name="comic_row_min_height">116dp</dimen>
+    <dimen name="floating_action_size">62dp</dimen>
+</resources>

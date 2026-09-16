@@ -2,47 +2,54 @@ package com.localmanga.shelf;
 
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.app.ProgressDialog;
 import android.content.ClipData;
 import android.content.Intent;
-import android.database.Cursor;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
-import android.provider.OpenableColumns;
 import android.text.InputType;
+import android.view.Gravity;
 import android.view.View;
+import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
+import android.widget.TextView;
 import android.widget.Toast;
 import java.util.ArrayList;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
-public final class MainActivity extends Activity implements LibraryView.Actions {
+public final class MainActivity extends Activity implements LibraryView.Actions, LibraryTaskController.Listener {
     private static final int PICK_ARCHIVE = 40;
     private static final int CREATE_BACKUP = 41;
     private static final int RESTORE_BACKUP = 42;
-    private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    private LibraryTaskController tasks;
     private ComicRepository repository;
     private LibraryView library;
     private AppLock appLock;
-    private ProgressDialog activeProgress;
-    private volatile boolean destroyed;
+    private FrameLayout contentHost;
+    private FrameLayout taskOverlay;
+    private TextView taskTitle;
+    private TextView taskMessage;
+    private Button cancelTask;
+    private boolean firstResume = true;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
-        getWindow().setStatusBarColor(0xFFF47B20);
-        getWindow().setNavigationBarColor(0xFFFFFCF8);
-        repository = new ComicRepository(this);
+        getWindow().setStatusBarColor(getColor(R.color.manga_orange));
+        getWindow().setNavigationBarColor(getColor(R.color.manga_surface));
+        Object retained = getLastNonConfigurationInstance();
+        tasks = retained instanceof LibraryTaskController
+                ? (LibraryTaskController) retained : new LibraryTaskController(this);
+        repository = tasks.repository();
         appLock = new AppLock(this);
         library = new LibraryView(this, this);
-        setContentView(library);
-        reload();
+        buildRoot();
+        tasks.refresh();
         if (appLock.isEnabled() && !AppLock.isSessionUnlocked()) {
             library.setVisibility(View.INVISIBLE);
             showUnlockDialog();
@@ -51,38 +58,92 @@ public final class MainActivity extends Activity implements LibraryView.Actions 
         }
     }
 
+    private void buildRoot() {
+        FrameLayout root = new FrameLayout(this);
+        root.setBackgroundColor(getColor(R.color.manga_background));
+        contentHost = new FrameLayout(this);
+        root.addView(contentHost, new FrameLayout.LayoutParams(-1, -1));
+
+        taskOverlay = new FrameLayout(this);
+        taskOverlay.setBackgroundColor(0x66000000);
+        taskOverlay.setClickable(true);
+        taskOverlay.setFocusable(true);
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(dp(22), dp(20), dp(22), dp(16));
+        GradientDrawable panelBackground = new GradientDrawable();
+        panelBackground.setColor(0xFFFFFCF8);
+        panelBackground.setCornerRadius(dp(18));
+        panel.setBackground(panelBackground);
+        taskTitle = new TextView(this);
+        taskTitle.setTextSize(18);
+        taskTitle.setTextColor(0xFF24212B);
+        taskTitle.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        panel.addView(taskTitle, new LinearLayout.LayoutParams(-1, -2));
+        taskMessage = new TextView(this);
+        taskMessage.setTextSize(14);
+        taskMessage.setTextColor(0xFF6F625A);
+        LinearLayout.LayoutParams messageLayout = new LinearLayout.LayoutParams(-1, -2);
+        messageLayout.setMargins(0, dp(8), 0, dp(10));
+        panel.addView(taskMessage, messageLayout);
+        ProgressBar progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        progress.setIndeterminate(true);
+        panel.addView(progress, new LinearLayout.LayoutParams(-1, dp(8)));
+        cancelTask = new Button(this);
+        cancelTask.setText("取消操作");
+        cancelTask.setOnClickListener(view -> tasks.cancel());
+        LinearLayout.LayoutParams cancelLayout = new LinearLayout.LayoutParams(-2, dp(48));
+        cancelLayout.gravity = Gravity.END;
+        cancelLayout.setMargins(0, dp(10), 0, 0);
+        panel.addView(cancelTask, cancelLayout);
+        FrameLayout.LayoutParams panelLayout = new FrameLayout.LayoutParams(-1, -2, Gravity.CENTER);
+        panelLayout.setMargins(dp(24), 0, dp(24), 0);
+        taskOverlay.addView(panel, panelLayout);
+        taskOverlay.setVisibility(View.GONE);
+        root.addView(taskOverlay, new FrameLayout.LayoutParams(-1, -1));
+        setContentView(root);
+        showPage(library);
+        WindowInsetsHelper.enableEdgeToEdge(getWindow(), root);
+    }
+
+    private void showPage(View page) {
+        if (page.getParent() == contentHost) return;
+        if (page.getParent() instanceof android.view.ViewGroup) {
+            ((android.view.ViewGroup) page.getParent()).removeView(page);
+        }
+        contentHost.removeAllViews();
+        contentHost.addView(page, new FrameLayout.LayoutParams(-1, -1));
+    }
+
     private void showStartDestination() {
         boolean complete = getSharedPreferences("onboarding_v3", MODE_PRIVATE).getBoolean("complete", false);
-        if (complete) { library.setVisibility(View.VISIBLE); setContentView(library); }
+        if (complete) { library.setVisibility(View.VISIBLE); showPage(library); }
         else showOnboarding();
     }
 
     private void showOnboarding() {
-        setContentView(new OnboardingView(this, importNow -> {
+        showPage(new OnboardingView(this, importNow -> {
             getSharedPreferences("onboarding_v3", MODE_PRIVATE).edit().putBoolean("complete", true).apply();
-            library.setVisibility(View.VISIBLE); setContentView(library);
+            library.setVisibility(View.VISIBLE); showPage(library);
             if (importNow) library.post(this::importComic);
         }));
     }
 
-    @Override protected void onResume() { super.onResume(); if (repository != null) reload(); }
+    @Override protected void onStart() { super.onStart(); tasks.attach(this); }
+    @Override protected void onStop() { tasks.detach(this); super.onStop(); }
+    @Override protected void onResume() {
+        super.onResume();
+        if (firstResume) firstResume = false;
+        else tasks.refresh();
+    }
+    @Override public Object onRetainNonConfigurationInstance() { return tasks; }
     @Override protected void onDestroy() {
-        destroyed = true;
-        if (activeProgress != null) activeProgress.dismiss();
         if (library != null) library.close();
-        worker.shutdownNow();
+        if (!isChangingConfigurations() && tasks != null) tasks.close();
         super.onDestroy();
     }
 
-    private void reload() {
-        if (destroyed) return;
-        worker.execute(() -> {
-            java.util.List<Comic> items = repository.loadAll();
-            long bytes = repository.totalBytes(items);
-            List<String> collections = repository.loadCollections();
-            runOnUiThreadSafely(() -> library.setLibrary(items, bytes, collections));
-        });
-    }
+    private void reload() { tasks.refresh(); }
 
     @Override public void importComic() {
         Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT);
@@ -97,11 +158,11 @@ public final class MainActivity extends Activity implements LibraryView.Actions 
         super.onActivityResult(code, result, data);
         if (result != RESULT_OK || data == null || data.getData() == null && data.getClipData() == null) return;
         if (code == CREATE_BACKUP && data.getData() != null) {
-            exportBackup(data.getData());
+            tasks.exportBackup(data.getData());
             return;
         }
         if (code == RESTORE_BACKUP && data.getData() != null) {
-            restoreBackup(data.getData());
+            tasks.restoreBackup(data.getData());
             return;
         }
         if (code != PICK_ARCHIVE) return;
@@ -110,51 +171,7 @@ public final class MainActivity extends Activity implements LibraryView.Actions 
         if (clips != null) {
             for (int i = 0; i < clips.getItemCount(); i++) selected.add(clips.getItemAt(i).getUri());
         } else if (data.getData() != null) selected.add(data.getData());
-        if (!selected.isEmpty()) importUris(selected);
-    }
-
-    private String displayName(Uri uri) {
-        try (Cursor cursor = getContentResolver().query(uri, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
-            if (cursor != null && cursor.moveToFirst()) return cursor.getString(0);
-        } catch (Exception ignored) {}
-        return "新漫画.cbz";
-    }
-
-    private void importUris(List<Uri> uris) {
-        ProgressDialog dialog = new ProgressDialog(this);
-        dialog.setTitle(uris.size() > 1 ? "正在批量导入漫画" : "正在导入漫画");
-        dialog.setMessage("正在读取压缩包…");
-        dialog.setCancelable(false);
-        dialog.show();
-        activeProgress = dialog;
-        worker.execute(() -> {
-            int success = 0; int pages = 0; List<String> failures = new ArrayList<>();
-            for (int i = 0; i < uris.size(); i++) {
-                Uri uri = uris.get(i); String name = displayName(uri); int current = i + 1;
-                runOnUiThreadSafely(() -> dialog.setMessage("正在导入 " + current + "/" + uris.size() + "\n" + name));
-                try {
-                    Comic comic = repository.importArchive(uri, name, (message, count) ->
-                            runOnUiThreadSafely(() -> dialog.setMessage("正在导入 " + current + "/" + uris.size() + "\n" + name + " · " + count + " 页")));
-                    success++; pages += comic.pageCount();
-                } catch (Exception error) {
-                    failures.add(name + "：" + error.getMessage());
-                }
-            }
-            int imported = success, totalPages = pages;
-            runOnUiThreadSafely(() -> finishBatchImport(dialog, uris.size(), imported, totalPages, failures));
-        });
-    }
-
-    private void finishBatchImport(ProgressDialog dialog, int total, int success, int pages, List<String> failures) {
-        dismissProgress(dialog); reload();
-        if (failures.isEmpty()) {
-            Toast.makeText(this, "已导入 " + success + " 本漫画，共 " + pages + " 页", Toast.LENGTH_LONG).show();
-            return;
-        }
-        String message = "成功 " + success + "/" + total + " 本";
-        if (!failures.isEmpty()) message += "\n\n未导入：\n" + android.text.TextUtils.join("\n", failures);
-        new AlertDialog.Builder(this).setTitle(success > 0 ? "部分导入完成" : "导入失败")
-                .setMessage(message).setPositiveButton("知道了", null).show();
+        if (!selected.isEmpty()) tasks.importArchives(selected);
     }
 
     @Override public void openComic(Comic comic) {
@@ -217,25 +234,7 @@ public final class MainActivity extends Activity implements LibraryView.Actions 
     }
 
     private void mergeInBackground(Comic target, Comic sequel) {
-        ProgressDialog dialog = new ProgressDialog(this); dialog.setTitle("正在合并漫画");
-        dialog.setMessage("正在准备页面…"); dialog.setCancelable(false); dialog.show();
-        activeProgress = dialog;
-        worker.execute(() -> {
-            try {
-                Comic merged = repository.mergeComics(target.id, sequel.id, (copied, total) ->
-                        runOnUiThreadSafely(() -> dialog.setMessage("正在复制页面 " + copied + "/" + total)));
-                runOnUiThreadSafely(() -> {
-                    dismissProgress(dialog); reload();
-                    new AlertDialog.Builder(this).setTitle("合并完成")
-                            .setMessage("《" + merged.title + "》现在共有 " + merged.pageCount() + " 页。\n\n续集《" + sequel.title + "》仍保留在书架中，核对页序后可手动删除。")
-                            .setPositiveButton("知道了", null).show();
-                });
-            } catch (Exception error) {
-                runOnUiThreadSafely(() -> { dismissProgress(dialog); new AlertDialog.Builder(this).setTitle("合并失败")
-                        .setMessage(error.getMessage() + "\n\n原漫画和续集均已保留。")
-                        .setPositiveButton("知道了", null).show(); });
-            }
-        });
+        tasks.merge(target, sequel);
     }
 
     private void renameComic(Comic comic) {
@@ -252,9 +251,7 @@ public final class MainActivity extends Activity implements LibraryView.Actions 
         new AlertDialog.Builder(this).setTitle("删除《" + comic.title + "》？")
                 .setMessage("解压后的图片和阅读进度将从本机永久删除。")
                 .setNegativeButton("取消", null)
-                .setPositiveButton("删除", (d, w) -> worker.execute(() -> {
-                    repository.delete(comic); runOnUiThreadSafely(this::reload);
-                })).show();
+                .setPositiveButton("删除", (d, w) -> tasks.delete(comic)).show();
     }
 
     @Override public void createCollection() {
@@ -389,69 +386,25 @@ public final class MainActivity extends Activity implements LibraryView.Actions 
         startActivityForResult(intent, RESTORE_BACKUP);
     }
 
-    private void exportBackup(Uri destination) {
-        ProgressDialog dialog = showProgress("正在导出书架", "正在准备备份…");
-        worker.execute(() -> {
-            try {
-                repository.exportBackup(destination, (message, current, total) -> runOnUiThreadSafely(() ->
-                        dialog.setMessage(message + " " + current + "/" + Math.max(current, total))));
-                runOnUiThreadSafely(() -> {
-                    dismissProgress(dialog);
-                    Toast.makeText(this, "书架备份已保存", Toast.LENGTH_LONG).show();
-                });
-            } catch (Exception error) {
-                runOnUiThreadSafely(() -> showBackupError(dialog, "备份失败", error));
-            }
-        });
+    @Override public void onTaskState(LibraryTaskController.State state) {
+        taskTitle.setText(state.title);
+        taskMessage.setText(state.message);
+        cancelTask.setVisibility(state.cancellable ? View.VISIBLE : View.GONE);
+        taskOverlay.setVisibility(state.running ? View.VISIBLE : View.GONE);
+        taskOverlay.announceForAccessibility(state.running ? state.title + "。" + state.message : "操作完成");
     }
 
-    private void restoreBackup(Uri source) {
-        ProgressDialog dialog = showProgress("正在恢复书架", "正在检查备份…");
-        worker.execute(() -> {
-            try {
-                ComicRepository.RestoreResult result = repository.restoreBackup(source, (message, current, total) ->
-                        runOnUiThreadSafely(() -> dialog.setMessage(message + " " + current + " 页")));
-                runOnUiThreadSafely(() -> {
-                    dismissProgress(dialog);
-                    reload();
-                    new AlertDialog.Builder(this).setTitle("书架恢复完成")
-                            .setMessage("已恢复 " + result.comics + " 本漫画，共 " + result.pages + " 页。")
-                            .setPositiveButton("知道了", null).show();
-                });
-            } catch (Exception error) {
-                runOnUiThreadSafely(() -> showBackupError(dialog, "恢复失败", error));
-            }
-        });
+    @Override public void onLibrarySnapshot(LibraryTaskController.Snapshot snapshot) {
+        library.setLibrary(snapshot.comics, snapshot.bytes, snapshot.collections);
     }
 
-    private ProgressDialog showProgress(String title, String message) {
-        ProgressDialog dialog = new ProgressDialog(this);
-        dialog.setTitle(title);
-        dialog.setMessage(message);
-        dialog.setCancelable(false);
-        dialog.show();
-        activeProgress = dialog;
-        return dialog;
-    }
-
-    private void showBackupError(ProgressDialog dialog, String title, Exception error) {
-        dismissProgress(dialog);
-        String message = error.getMessage();
-        if (message == null || message.trim().isEmpty()) message = "发生未知错误，请重试。";
-        new AlertDialog.Builder(this).setTitle(title).setMessage(message)
-                .setPositiveButton("知道了", null).show();
-    }
-
-    private void dismissProgress(ProgressDialog dialog) {
-        if (dialog != null && dialog.isShowing()) dialog.dismiss();
-        if (activeProgress == dialog) activeProgress = null;
-    }
-
-    private void runOnUiThreadSafely(Runnable action) {
-        runOnUiThread(() -> {
-            if (destroyed || isFinishing() || isDestroyed()) return;
-            action.run();
-        });
+    @Override public void onTaskEvent(LibraryTaskController.Event event) {
+        if (event.toast) {
+            Toast.makeText(this, event.message, Toast.LENGTH_LONG).show();
+        } else {
+            new AlertDialog.Builder(this).setTitle(event.title).setMessage(event.message)
+                    .setPositiveButton("知道了", null).show();
+        }
     }
 
     private void showAbout() {
