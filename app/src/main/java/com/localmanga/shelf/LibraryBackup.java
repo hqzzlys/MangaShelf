@@ -56,6 +56,7 @@ final class LibraryBackup {
             byte[] buffer = new byte[64 * 1024];
             for (Comic comic : comics) {
                 for (File page : comic.pages) {
+                    checkCancelled();
                     String relative = relativePath(comic.directory, page);
                     if (!ArchiveUtils.isSafeRelativeBackupPath(relative)) {
                         throw new IOException("漫画包含无法备份的文件路径：" + page.getName());
@@ -68,7 +69,10 @@ final class LibraryBackup {
                     zip.putNextEntry(entry);
                     try (InputStream input = new BufferedInputStream(new FileInputStream(page))) {
                         int read;
-                        while ((read = input.read(buffer)) != -1) zip.write(buffer, 0, read);
+                        while ((read = input.read(buffer)) != -1) {
+                            checkCancelled();
+                            zip.write(buffer, 0, read);
+                        }
                     }
                     zip.closeEntry();
                     exported++;
@@ -91,6 +95,7 @@ final class LibraryBackup {
             Map<String, String> restoredIds = allocateIds(root, records);
 
             for (RestoreRecord record : records) {
+                checkCancelled();
                 File target = new File(root, restoredIds.get(record.sourceId));
                 if (!record.directory.renameTo(target)) throw new IOException("无法恢复漫画《" + record.title + "》");
                 record.restoredDirectory = target;
@@ -110,11 +115,12 @@ final class LibraryBackup {
 
             int pages = 0;
             for (RestoreRecord record : records) {
+                checkCancelled();
                 String targetId = restoredIds.get(record.sourceId);
                 List<File> restoredPages = ArchiveUtils.scanImages(record.restoredDirectory);
                 pages += restoredPages.size();
                 editor.putString(targetId + ".title", record.title)
-                        .putInt(targetId + ".progress", Math.max(0, Math.min(record.progress, restoredPages.size() - 1)))
+                        .putInt(targetId + ".progress", Math.max(-1, Math.min(record.progress, restoredPages.size() - 1)))
                         .putLong(targetId + ".imported", record.importedAt)
                         .putLong(targetId + ".lastRead", record.lastRead)
                         .putBoolean(targetId + ".favorite", record.favorite)
@@ -180,6 +186,7 @@ final class LibraryBackup {
         try (ZipInputStream zip = new ZipInputStream(new BufferedInputStream(raw))) {
             ZipEntry entry;
             while ((entry = zip.getNextEntry()) != null) {
+                checkCancelled();
                 String name = entry.getName().replace('\\', '/');
                 if (entry.isDirectory()) {
                     zip.closeEntry();
@@ -210,6 +217,7 @@ final class LibraryBackup {
                 try (OutputStream target = new BufferedOutputStream(new FileOutputStream(output))) {
                     int read;
                     while ((read = zip.read(buffer)) != -1) {
+                        checkCancelled();
                         totalBytes += read;
                         if (totalBytes > MAX_BACKUP_BYTES) throw new IOException("备份内容超过 20 GB 安全上限");
                         target.write(buffer, 0, read);
@@ -227,6 +235,7 @@ final class LibraryBackup {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         int read;
         while ((read = zip.read(buffer)) != -1) {
+            checkCancelled();
             if (output.size() + read > MAX_MANIFEST_BYTES) throw new IOException("备份清单过大");
             output.write(buffer, 0, read);
         }
@@ -263,7 +272,7 @@ final class LibraryBackup {
             String title = item.optString("title", sourceId).trim();
             if (title.isEmpty()) title = sourceId;
             RestoreRecord record = new RestoreRecord(sourceId, title, directory);
-            record.progress = item.optInt("progress", 0);
+            record.progress = item.optInt("progress", -1);
             record.importedAt = item.optLong("importedAt", directory.lastModified());
             record.lastRead = item.optLong("lastRead", 0L);
             record.favorite = item.optBoolean("favorite", false);
@@ -320,6 +329,10 @@ final class LibraryBackup {
             if (children != null) for (File child : children) deleteRecursive(child);
         }
         file.delete();
+    }
+
+    private static void checkCancelled() throws java.io.InterruptedIOException {
+        if (Thread.currentThread().isInterrupted()) throw new java.io.InterruptedIOException("操作已取消");
     }
 
     private static final class RestoreRecord {

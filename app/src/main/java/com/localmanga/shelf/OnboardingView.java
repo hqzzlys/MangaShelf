@@ -9,20 +9,21 @@ import android.view.View;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.Button;
 import android.widget.TextView;
 
 @SuppressLint("ViewConstructor")
 public final class OnboardingView extends FrameLayout {
     public interface Listener { void onFinish(boolean importNow); }
 
-    private static final int ORANGE = 0xFFF47B20;
+    private final int orange;
     private final Listener listener;
     private final ImageView artwork;
     private final TextView title;
     private final TextView description;
     private final TextView dots;
-    private final TextView secondary;
-    private final TextView primary;
+    private final Button secondary;
+    private final Button primary;
     private final float density;
     private int page;
 
@@ -51,7 +52,8 @@ public final class OnboardingView extends FrameLayout {
     public OnboardingView(Context context, Listener listener) {
         super(context); this.listener = listener;
         density = getResources().getDisplayMetrics().density;
-        setBackgroundColor(0xFFFFFCF8);
+        orange = getResources().getColor(R.color.manga_orange, context.getTheme());
+        setBackgroundColor(getResources().getColor(R.color.manga_surface, context.getTheme()));
 
         LinearLayout root = new LinearLayout(context); root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(24), dp(18), dp(24), dp(22)); addView(root, new FrameLayout.LayoutParams(-1, -1));
@@ -62,20 +64,20 @@ public final class OnboardingView extends FrameLayout {
         brand.setContentDescription(getResources().getString(R.string.app_name));
         brand.setClipToOutline(true); brandRow.addView(brand, lp(dp(42), dp(42)));
         TextView brandName = text("漫匣", 20, 0xFF24201D, true); brandName.setPadding(dp(11), 0, 0, 0);
-        brandRow.addView(brandName, lp(-2, dp(42))); root.addView(brandRow, lp(-1, dp(50)));
+        brandRow.addView(brandName, lp(-2, -2)); brandRow.setMinimumHeight(dp(50)); root.addView(brandRow, lp(-1, -2));
 
         artwork = new ImageView(context); artwork.setScaleType(ImageView.ScaleType.FIT_CENTER);
         LinearLayout.LayoutParams art = new LinearLayout.LayoutParams(-1, 0, 1); art.setMargins(0, dp(8), 0, dp(6)); root.addView(artwork, art);
-        title = text("", 28, 0xFF25211E, true); title.setGravity(Gravity.CENTER); root.addView(title, lp(-1, dp(48)));
+        title = text("", 28, 0xFF25211E, true); title.setGravity(Gravity.CENTER); title.setMinHeight(dp(48)); root.addView(title, lp(-1, -2));
         description = text("", 15, 0xFF746C66, false); description.setGravity(Gravity.CENTER);
-        description.setLineSpacing(0, 1.2f); root.addView(description, lp(-1, dp(72)));
-        dots = text("", 14, ORANGE, true); dots.setGravity(Gravity.CENTER); root.addView(dots, lp(-1, dp(42)));
+        description.setLineSpacing(0, 1.2f); description.setMinHeight(dp(72)); root.addView(description, lp(-1, -2));
+        dots = text("", 14, orange, true); dots.setGravity(Gravity.CENTER); dots.setMinHeight(dp(42)); root.addView(dots, lp(-1, -2));
 
         LinearLayout actions = new LinearLayout(context); actions.setGravity(Gravity.CENTER_VERTICAL);
-        secondary = text("跳过", 15, 0xFF7A716A, true); secondary.setGravity(Gravity.CENTER);
+        secondary = button("跳过", 15, 0xFF7A716A); secondary.setContentDescription("跳过使用介绍");
         secondary.setOnClickListener(v -> listener.onFinish(false));
-        primary = text("下一步", 16, Color.WHITE, true); primary.setGravity(Gravity.CENTER);
-        primary.setBackground(round(ORANGE, 16)); primary.setElevation(dp(5));
+        primary = button("下一步", 16, Color.WHITE); primary.setContentDescription("下一页介绍");
+        primary.setBackground(round(orange, 16)); primary.setElevation(dp(5));
         primary.setOnClickListener(v -> next());
         actions.addView(secondary, new LinearLayout.LayoutParams(0, dp(54), 1));
         LinearLayout.LayoutParams main = new LinearLayout.LayoutParams(0, dp(54), 1.55f); main.setMargins(dp(10), 0, 0, 0);
@@ -101,6 +103,8 @@ public final class OnboardingView extends FrameLayout {
         dots.setText(indicator.toString());
         secondary.setText(page == images.length - 1 ? "进入书架" : "跳过");
         primary.setText(page == images.length - 1 ? "导入第一本漫画" : "下一步");
+        secondary.setContentDescription(page == images.length - 1 ? "进入书架" : "跳过使用介绍");
+        primary.setContentDescription(page == images.length - 1 ? "导入第一本漫画" : "下一页介绍");
     }
 
     private TextView text(String value, int size, int color, boolean bold) {
@@ -108,6 +112,13 @@ public final class OnboardingView extends FrameLayout {
         view.setTypeface(android.graphics.Typeface.create("sans", bold
                 ? android.graphics.Typeface.BOLD : android.graphics.Typeface.NORMAL));
         return view;
+    }
+
+    private Button button(String value, int size, int color) {
+        Button button = new Button(getContext()); button.setText(value); button.setTextSize(size); button.setTextColor(color);
+        button.setAllCaps(false); button.setGravity(Gravity.CENTER); button.setMinHeight(dp(48));
+        button.setTypeface(android.graphics.Typeface.DEFAULT_BOLD); button.setBackgroundColor(Color.TRANSPARENT);
+        return button;
     }
 
     private GradientDrawable round(int color, int radius) {

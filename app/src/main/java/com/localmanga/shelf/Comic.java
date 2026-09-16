@@ -20,7 +20,8 @@ public final class Comic {
         this.collection = collection == null ? "" : collection;
     }
     public int pageCount() { return pages.size(); }
-    public boolean isComplete() { return !pages.isEmpty() && progress >= pages.size() - 1; }
+    public boolean isComplete() { return lastRead > 0L && !pages.isEmpty() && progress >= pages.size() - 1; }
     public boolean isUnread() { return lastRead == 0L; }
+    public int pagesRead() { return isUnread() ? 0 : Math.min(pageCount(), Math.max(0, progress + 1)); }
     public File cover() { return pages.isEmpty() ? null : pages.get(0); }
 }

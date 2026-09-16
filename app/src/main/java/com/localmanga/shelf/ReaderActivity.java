@@ -17,6 +17,7 @@ import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.Button;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import java.io.File;
@@ -38,6 +39,7 @@ public final class ReaderActivity extends Activity {
     private Bitmap currentBitmap;
     private int page;
     private boolean chromeVisible = true;
+    private boolean rightToLeft;
     private volatile boolean destroyed;
     private float touchX;
 
@@ -49,8 +51,10 @@ public final class ReaderActivity extends Activity {
             gate.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
             startActivity(gate); finish(); return;
         }
-        getWindow().setStatusBarColor(Color.BLACK); getWindow().setNavigationBarColor(Color.BLACK);
+        int readerBackground = getColor(R.color.reader_background);
+        getWindow().setStatusBarColor(readerBackground); getWindow().setNavigationBarColor(readerBackground);
         repository = new ComicRepository(this);
+        rightToLeft = getSharedPreferences("reader_settings_v1", MODE_PRIVATE).getBoolean("right_to_left", false);
         comic = repository.load(getIntent().getStringExtra("comic_id"));
         if (comic == null || comic.pages.isEmpty()) { finish(); return; }
         page = Math.max(0, Math.min(comic.progress, comic.pages.size() - 1));
@@ -58,7 +62,7 @@ public final class ReaderActivity extends Activity {
     }
 
     private void buildUi() {
-        FrameLayout root = new FrameLayout(this); root.setBackgroundColor(Color.BLACK);
+        FrameLayout root = new FrameLayout(this); root.setBackgroundColor(getColor(R.color.reader_background));
         pageView = new ReaderPageView(this); pageView.setScaleType(ImageView.ScaleType.FIT_CENTER); pageView.setBackgroundColor(Color.BLACK);
         pageView.setContentDescription(getString(R.string.reader_page_description));
         root.addView(pageView, new FrameLayout.LayoutParams(-1, -1));
@@ -69,25 +73,26 @@ public final class ReaderActivity extends Activity {
             return onPageTouch(event);
         });
         pageView.setOnClickListener(view -> toggleChrome());
-        topBar = buildTop(); root.addView(topBar, new FrameLayout.LayoutParams(-1, dp(82), Gravity.TOP));
-        controls = buildControls(); FrameLayout.LayoutParams cp = new FrameLayout.LayoutParams(-1, dp(170), Gravity.BOTTOM); root.addView(controls, cp);
+        topBar = buildTop(); root.addView(topBar, new FrameLayout.LayoutParams(-1, -2, Gravity.TOP));
+        controls = buildControls(); FrameLayout.LayoutParams cp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM); root.addView(controls, cp);
         setContentView(root);
+        WindowInsetsHelper.enableEdgeToEdge(getWindow(), root);
     }
 
     private LinearLayout buildTop() {
         LinearLayout bar = new LinearLayout(this); bar.setGravity(Gravity.CENTER_VERTICAL); bar.setPadding(dp(12), dp(10), dp(12), 0);
-        bar.setBackgroundColor(0xDD090909);
-        TextView back = text("‹", 42, Color.WHITE, false); back.setGravity(Gravity.CENTER); back.setOnClickListener(v -> finish()); bar.addView(back, lp(dp(48), -1));
+        bar.setBackgroundColor(0xDD090909); bar.setMinimumHeight(dp(72));
+        Button back = actionButton("‹", "返回书架", 38); back.setOnClickListener(v -> finish()); bar.addView(back, lp(dp(48), dp(48)));
         LinearLayout titles = new LinearLayout(this); titles.setOrientation(LinearLayout.VERTICAL); titles.setGravity(Gravity.CENTER_VERTICAL);
-        titles.addView(text(comic.title, 17, Color.WHITE, true), lp(-1, dp(30)));
-        titles.addView(text("本地漫画 · 共 " + comic.pageCount() + " 页", 12, 0xFFCACACA, false), lp(-1, dp(24)));
+        titles.addView(text(comic.title, 17, Color.WHITE, true), lp(-1, -2));
+        titles.addView(text("本地漫画 · 共 " + comic.pageCount() + " 页", 12, 0xFFCACACA, false), lp(-1, -2));
         bar.addView(titles, new LinearLayout.LayoutParams(0, -1, 1));
-        TextView menu = text("⋮", 29, Color.WHITE, true); menu.setGravity(Gravity.CENTER); menu.setOnClickListener(v -> showReaderInfo()); bar.addView(menu, lp(dp(44), -1)); return bar;
+        Button menu = actionButton("⋮", "阅读设置", 26); menu.setOnClickListener(v -> showReaderInfo()); bar.addView(menu, lp(dp(48), dp(48))); return bar;
     }
 
     private LinearLayout buildControls() {
         LinearLayout panel = new LinearLayout(this); panel.setOrientation(LinearLayout.VERTICAL); panel.setPadding(dp(18), dp(12), dp(18), dp(8));
-        panel.setBackground(round(0xEB121212, 22));
+        panel.setBackground(round(0xEB121212, 22)); panel.setMinimumHeight(dp(150));
         LinearLayout seekRow = new LinearLayout(this); seekRow.setGravity(Gravity.CENTER_VERTICAL);
         pageLabel = text("1/1", 14, 0xFFFF9A45, true); seekRow.addView(pageLabel, lp(dp(54), dp(36)));
         progress = new SeekBar(this); progress.setMax(Math.max(0, comic.pageCount() - 1)); progress.setProgress(page);
@@ -95,23 +100,23 @@ public final class ReaderActivity extends Activity {
         progress.setThumbTintList(android.content.res.ColorStateList.valueOf(0xFFF47B20));
         seekRow.addView(progress, new LinearLayout.LayoutParams(0, dp(40), 1));
         remainLabel = text(getString(R.string.reader_remaining_pages, 0), 13, Color.WHITE, false); remainLabel.setGravity(Gravity.END | Gravity.CENTER_VERTICAL); seekRow.addView(remainLabel, lp(dp(78), dp(36)));
-        panel.addView(seekRow, lp(-1, dp(48)));
+        seekRow.setMinimumHeight(dp(48)); panel.addView(seekRow, lp(-1, -2));
         progress.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             public void onProgressChanged(SeekBar s, int value, boolean user) { if (user) updateLabels(value); }
             public void onStartTrackingTouch(SeekBar s) {}
             public void onStopTrackingTouch(SeekBar s) { showPage(s.getProgress()); }
         });
         LinearLayout actions = new LinearLayout(this); actions.setGravity(Gravity.CENTER);
-        addAction(actions, "◀\n上一页", v -> showPage(page - 1));
-        addAction(actions, "☀\n亮度", v -> brightnessDialog());
-        addAction(actions, "▣\n适应", v -> toggleScale());
-        addAction(actions, "◇\n旋转", v -> toggleOrientation());
-        addAction(actions, "▶\n下一页", v -> showPage(page + 1));
-        panel.addView(actions, lp(-1, dp(88))); return panel;
+        addAction(actions, "◀\n上一页", "上一页", v -> showPage(page - 1));
+        addAction(actions, "☀\n亮度", "调整亮度", v -> brightnessDialog());
+        addAction(actions, "▣\n适应", "切换图片适应方式", v -> toggleScale());
+        addAction(actions, "◇\n旋转", "旋转屏幕", v -> toggleOrientation());
+        addAction(actions, "▶\n下一页", "下一页", v -> showPage(page + 1));
+        actions.setMinimumHeight(dp(88)); panel.addView(actions, lp(-1, -2)); return panel;
     }
 
-    private void addAction(LinearLayout row, String value, View.OnClickListener click) {
-        TextView item = text(value, 13, Color.WHITE, false); item.setGravity(Gravity.CENTER); item.setOnClickListener(click);
+    private void addAction(LinearLayout row, String value, String description, View.OnClickListener click) {
+        Button item = actionButton(value, description, 13); item.setOnClickListener(click);
         row.addView(item, new LinearLayout.LayoutParams(0, -1, 1));
     }
 
@@ -120,11 +125,11 @@ public final class ReaderActivity extends Activity {
         if (event.getAction() == MotionEvent.ACTION_UP) {
             float delta = event.getX() - touchX;
             if (Math.abs(delta) > dp(55)) {
-                showPage(page + (delta < 0 ? 1 : -1));
+                showPage(page + pageDelta(delta < 0));
             } else {
                 float position = event.getX() / Math.max(1f, pageView.getWidth());
-                if (position < 0.30f) showPage(page - 1);
-                else if (position > 0.70f) showPage(page + 1);
+                if (position < 0.30f) showPage(page + pageDelta(false));
+                else if (position > 0.70f) showPage(page + pageDelta(true));
             }
             return true;
         }
@@ -134,6 +139,7 @@ public final class ReaderActivity extends Activity {
     private void showPage(int requested) {
         int next = Math.max(0, Math.min(requested, comic.pageCount() - 1)); page = next;
         updateLabels(next); repository.saveProgress(comic.id, next);
+        pageView.setContentDescription(getString(R.string.reader_page_position_description, next + 1, comic.pageCount()));
         File file = comic.pages.get(next); int targetW = getResources().getDisplayMetrics().widthPixels;
         int targetH = getResources().getDisplayMetrics().heightPixels;
         int generation = decodeGeneration.incrementAndGet();
@@ -184,8 +190,24 @@ public final class ReaderActivity extends Activity {
     }
 
     private void showReaderInfo() {
-        new AlertDialog.Builder(this).setTitle("阅读操作").setMessage("点击屏幕左侧翻到上一页，点击右侧翻到下一页；点击中间区域隐藏或显示控制栏。也可左右滑动翻页。“适应”可切换完整显示与铺满屏幕，阅读进度会自动保存。")
-                .setPositiveButton("知道了", null).show();
+        String direction = rightToLeft ? "从右向左" : "从左向右";
+        new AlertDialog.Builder(this).setTitle("阅读设置")
+                .setItems(new String[]{"查看操作说明", "翻页方向 · " + direction}, (dialog, which) -> {
+                    if (which == 0) {
+                        new AlertDialog.Builder(this).setTitle("阅读操作")
+                                .setMessage("点击屏幕两侧或左右滑动翻页；点击中间区域隐藏或显示控制栏。“适应”可切换完整显示与铺满屏幕，阅读进度会自动保存。")
+                                .setPositiveButton("知道了", null).show();
+                    } else {
+                        rightToLeft = !rightToLeft;
+                        getSharedPreferences("reader_settings_v1", MODE_PRIVATE).edit().putBoolean("right_to_left", rightToLeft).apply();
+                        android.widget.Toast.makeText(this, "翻页方向已切换为" + (rightToLeft ? "从右向左" : "从左向右"), android.widget.Toast.LENGTH_SHORT).show();
+                    }
+                }).setNegativeButton("取消", null).show();
+    }
+
+    private int pageDelta(boolean towardLeft) {
+        int normal = towardLeft ? 1 : -1;
+        return rightToLeft ? -normal : normal;
     }
 
     private void recycleCurrent() { if (currentBitmap != null && !currentBitmap.isRecycled()) currentBitmap.recycle(); currentBitmap = null; }
@@ -209,6 +231,15 @@ public final class ReaderActivity extends Activity {
             super.performClick();
             return true;
         }
+    }
+    private Button actionButton(String value, String description, int size) {
+        Button button = new Button(this);
+        button.setText(value); button.setTextSize(size); button.setTextColor(Color.WHITE);
+        button.setAllCaps(false); button.setGravity(Gravity.CENTER); button.setPadding(0, 0, 0, 0);
+        int touchTarget = getResources().getDimensionPixelSize(R.dimen.minimum_touch_target);
+        button.setMinWidth(touchTarget); button.setMinHeight(touchTarget); button.setBackgroundColor(Color.TRANSPARENT);
+        button.setContentDescription(description);
+        return button;
     }
 
     @Override protected void onDestroy() {

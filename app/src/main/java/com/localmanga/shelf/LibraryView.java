@@ -7,11 +7,15 @@ import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
+import android.widget.BaseAdapter;
+import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.ScrollView;
+import android.widget.ListView;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import java.util.ArrayList;
 import java.util.List;
@@ -23,17 +27,25 @@ public final class LibraryView extends FrameLayout {
         void importComic(); void openComic(Comic comic); void manageComic(Comic comic);
         void search(); void showInfo(); void createCollection(); void manageCollection(String name);
     }
-    private static final int ORANGE = 0xFFF47B20;
+    private final int orange;
+    private final int textPrimary;
+    private final int textSecondary;
+    private final int screenPadding;
+    private final int coverWidth;
+    private final int coverHeight;
+    private final int rowMinHeight;
+    private final int fabSize;
     private final Actions actions;
     private final float density;
     private final LinearLayout content;
     private final LinearLayout stats;
     private final LinearLayout categories;
     private final LinearLayout collectionList;
-    private final LinearLayout comicList;
-    private final TextView search;
+    private final ListView list;
+    private final ComicAdapter comicAdapter = new ComicAdapter();
+    private final Button search;
     private final CoverLoader coverLoader = new CoverLoader();
-    private TextView sortButton;
+    private Button sortButton;
     private List<Comic> all = new ArrayList<>();
     private List<String> collectionNames = new ArrayList<>();
     private TextView comicsHeading;
@@ -42,39 +54,52 @@ public final class LibraryView extends FrameLayout {
     private int category;
     private int sortMode;
     private String query = "";
+    private List<Comic> displayed = new ArrayList<>();
 
     public LibraryView(Context context, Actions actions) {
         super(context); this.actions = actions;
         density = getResources().getDisplayMetrics().density;
-        setBackgroundColor(0xFFFFFAF5);
+        orange = getResources().getColor(R.color.manga_orange, context.getTheme());
+        textPrimary = getResources().getColor(R.color.manga_text_primary, context.getTheme());
+        textSecondary = getResources().getColor(R.color.manga_text_secondary, context.getTheme());
+        screenPadding = getResources().getDimensionPixelSize(R.dimen.screen_horizontal_padding);
+        coverWidth = getResources().getDimensionPixelSize(R.dimen.comic_cover_width);
+        coverHeight = getResources().getDimensionPixelSize(R.dimen.comic_cover_height);
+        rowMinHeight = getResources().getDimensionPixelSize(R.dimen.comic_row_min_height);
+        fabSize = getResources().getDimensionPixelSize(R.dimen.floating_action_size);
+        setBackgroundColor(getResources().getColor(R.color.manga_background, context.getTheme()));
 
-        ScrollView scroll = new ScrollView(context);
-        scroll.setClipToPadding(false); scroll.setPadding(0, 0, 0, dp(92));
+        list = new ListView(context);
+        list.setClipToPadding(false); list.setPadding(0, 0, 0, dp(92));
+        list.setDivider(null);
+        list.setDividerHeight(0);
+        list.setBackgroundColor(Color.TRANSPARENT);
         content = new LinearLayout(context); content.setOrientation(LinearLayout.VERTICAL);
-        scroll.addView(content, new ScrollView.LayoutParams(-1, -2)); addView(scroll, match());
 
-        LinearLayout hero = hero(); content.addView(hero, lp(-1, dp(198)));
-        search = label("⌕   搜索漫画名称", 14, 0xFF8A6650, false);
+        LinearLayout hero = hero(); hero.setMinimumHeight(dp(198)); content.addView(hero, lp(-1, -2));
+        search = button("⌕   搜索漫画名称", "搜索漫画", 14, 0xFF8A6650);
         search.setGravity(Gravity.CENTER_VERTICAL); search.setPadding(dp(18), 0, dp(18), 0);
         search.setBackground(round(Color.WHITE, 15)); search.setElevation(dp(2)); search.setOnClickListener(v -> actions.search());
-        LinearLayout.LayoutParams sp = lp(-1, dp(50)); sp.setMargins(dp(20), dp(12), dp(20), 0); hero.addView(search, sp);
+        LinearLayout.LayoutParams sp = lp(-1, -2); sp.setMargins(dp(20), dp(12), dp(20), dp(12)); hero.addView(search, sp);
 
         stats = new LinearLayout(context); stats.setGravity(Gravity.CENTER); stats.setBackground(round(Color.WHITE, 20));
-        LinearLayout.LayoutParams statPos = lp(-1, dp(128)); statPos.setMargins(dp(16), dp(-21), dp(16), dp(18)); content.addView(stats, statPos);
+        stats.setMinimumHeight(dp(128));
+        LinearLayout.LayoutParams statPos = lp(-1, -2); statPos.setMargins(dp(16), dp(-21), dp(16), dp(18)); content.addView(stats, statPos);
 
         addSectionTitle("智能分类", "", null);
         HorizontalScrollView categoryScroll = new HorizontalScrollView(context); categoryScroll.setHorizontalScrollBarEnabled(false);
         categories = new LinearLayout(context); categories.setPadding(dp(12), dp(8), dp(12), dp(10));
-        categoryScroll.addView(categories); content.addView(categoryScroll, lp(-1, dp(112)));
+        categoryScroll.addView(categories); content.addView(categoryScroll, lp(-1, -2));
 
         addSectionTitle("我的合集", "新建 +", v -> actions.createCollection());
         HorizontalScrollView collectionScroll = new HorizontalScrollView(context); collectionScroll.setHorizontalScrollBarEnabled(false);
         collectionList = new LinearLayout(context); collectionList.setPadding(dp(12), dp(5), dp(12), dp(8));
-        collectionScroll.addView(collectionList); content.addView(collectionScroll, lp(-1, dp(106)));
+        collectionScroll.addView(collectionList); content.addView(collectionScroll, lp(-1, -2));
 
         comicsHeading = addSectionTitle("我的漫画", "最近更新⌄", v -> showSortMenu());
-        comicList = new LinearLayout(context); comicList.setOrientation(LinearLayout.VERTICAL);
-        comicList.setPadding(dp(14), dp(4), dp(14), dp(20)); content.addView(comicList, lp(-1, -2));
+        list.addHeaderView(content, null, false);
+        list.setAdapter(comicAdapter);
+        addView(list, match());
         buildFab(); refresh();
     }
 
@@ -88,7 +113,7 @@ public final class LibraryView extends FrameLayout {
 
     private LinearLayout hero() {
         LinearLayout hero = new LinearLayout(getContext()); hero.setOrientation(LinearLayout.VERTICAL);
-        hero.setPadding(dp(22), dp(25), dp(22), 0);
+        hero.setPadding(screenPadding, dp(25), screenPadding, 0);
         GradientDrawable bg = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
                 new int[]{0xFFFFFCF8, 0xFFFFE7D2, 0xFFFF9A4A});
         hero.setBackground(bg);
@@ -97,31 +122,37 @@ public final class LibraryView extends FrameLayout {
         titleRow.addView(title, new LinearLayout.LayoutParams(0, dp(43), 1));
         ImageView brand = new ImageView(getContext()); brand.setImageResource(R.drawable.app_cover);
         brand.setScaleType(ImageView.ScaleType.CENTER_CROP); brand.setBackground(round(0x22FFFFFF, 12));
-        brand.setClipToOutline(true); brand.setContentDescription("漫匣封面");
+        brand.setClipToOutline(true); brand.setContentDescription(getResources().getString(R.string.brand_cover_description));
         LinearLayout.LayoutParams brandPos = lp(dp(43), dp(43)); brandPos.setMargins(0, 0, dp(5), 0);
         titleRow.addView(brand, brandPos);
-        TextView info = label("⋮", 29, 0xFF4A3325, true); info.setGravity(Gravity.CENTER); info.setOnClickListener(v -> actions.showInfo());
-        titleRow.addView(info, lp(dp(44), dp(44))); hero.addView(titleRow, lp(-1, dp(48)));
-        hero.addView(label("珍藏每一段精彩的故事", 15, 0xFF8A5B3D, false), lp(-1, dp(28)));
+        Button info = button("⋮", "打开应用菜单", 26, 0xFF4A3325); info.setOnClickListener(v -> actions.showInfo());
+        titleRow.addView(info, lp(dp(48), dp(48))); titleRow.setMinimumHeight(dp(48)); hero.addView(titleRow, lp(-1, -2));
+        hero.addView(label("珍藏每一段精彩的故事", 15, 0xFF8A5B3D, false), lp(-1, -2));
         return hero;
     }
 
     private TextView addSectionTitle(String left, String right, View.OnClickListener click) {
         LinearLayout row = new LinearLayout(getContext()); row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(20), 0, dp(20), 0);
-        TextView heading = label(left, 18, 0xFF24212B, true);
+        TextView heading = label(left, 18, textPrimary, true);
         row.addView(heading, new LinearLayout.LayoutParams(0, dp(34), 1));
-        TextView more = label(right, 13, 0xFF8B8693, false); more.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
-        if (click != null) { more.setOnClickListener(click); sortButton = more; }
-        row.addView(more, lp(dp(126), dp(34))); content.addView(row, lp(-1, dp(42))); return heading;
+        TextView more;
+        if (click != null) {
+            Button action = button(right, right, 13, 0xFF8B8693);
+            action.setGravity(Gravity.END | Gravity.CENTER_VERTICAL); action.setOnClickListener(click);
+            sortButton = action; more = action;
+        } else {
+            more = label(right, 13, 0xFF8B8693, false); more.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        }
+        row.addView(more, lp(dp(136), -2)); row.setMinimumHeight(dp(42)); content.addView(row, lp(-1, -2)); return heading;
     }
 
     private void refresh() {
         if (stats == null) return;
         search.setText(query.isEmpty() ? "⌕   搜索漫画名称" : "⌕   搜索：“" + query + "”");
         stats.removeAllViews();
-        int read = 0; for (Comic c : all) read += Math.min(c.pageCount(), c.progress + (c.lastRead > 0 ? 1 : 0));
-        addStat("▣", String.valueOf(all.size()), "漫画数量", 0xFFF47B20);
+        int read = 0; for (Comic c : all) read += c.pagesRead();
+        addStat("▣", String.valueOf(all.size()), "漫画数量", orange);
         addStat("▤", String.valueOf(read), "已读页数", 0xFFFF9B45);
         addStat("◆", formatBytes(totalBytes), "占用空间", 0xFFE85D0B);
         addStat("✓", "本地", "存储方式", 0xFFF2A45E);
@@ -141,23 +172,27 @@ public final class LibraryView extends FrameLayout {
         LinearLayout card = new LinearLayout(getContext()); card.setOrientation(LinearLayout.VERTICAL); card.setGravity(Gravity.CENTER);
         card.setPadding(dp(7), dp(5), dp(7), dp(5));
         card.setBackground(round(activeCollection.equals(key) ? 0xFFFFE6D0 : Color.WHITE, 14));
-        TextView icon = center("▰", 23, ORANGE, true); card.addView(icon, lp(-1, dp(34)));
-        TextView nameView = center(name, 12, 0xFF3A302A, true); nameView.setMaxLines(1); card.addView(nameView, lp(-1, dp(22)));
-        card.addView(center(count + (key.isEmpty() ? " 本" : " 本 · 长按"), 9, 0xFF9A7B67, false), lp(-1, dp(18)));
+        TextView icon = center("▰", 23, orange, true); card.addView(icon, lp(-1, -2));
+        TextView nameView = center(name, 12, 0xFF3A302A, true); nameView.setMaxLines(2); card.addView(nameView, lp(-1, -2));
+        card.addView(center(count + (key.isEmpty() ? " 本" : " 本 · 长按"), 9, 0xFF9A7B67, false), lp(-1, -2));
         card.setOnClickListener(v -> { activeCollection = key; refresh(); });
+        card.setFocusable(true); card.setMinimumHeight(dp(88));
+        card.setContentDescription(getResources().getString(key.isEmpty()
+                ? R.string.collection_description : R.string.collection_manage_description, name, count));
         if (!key.isEmpty()) card.setOnLongClickListener(v -> { actions.manageCollection(key); return true; });
         return card;
     }
 
     private LinearLayout.LayoutParams collectionParams() {
-        LinearLayout.LayoutParams params = lp(dp(96), dp(88)); params.setMargins(dp(4), 0, dp(4), 0); return params;
+        LinearLayout.LayoutParams params = lp(dp(96), -2); params.setMargins(dp(4), 0, dp(4), 0); return params;
     }
 
     private void addStat(String icon, String value, String caption, int color) {
         LinearLayout item = new LinearLayout(getContext()); item.setGravity(Gravity.CENTER); item.setOrientation(LinearLayout.VERTICAL);
         TextView i = label(icon, 17, color, true); i.setGravity(Gravity.CENTER); i.setBackground(round((color & 0x00FFFFFF) | 0x18000000, 24));
-        item.addView(i, lp(dp(42), dp(42))); item.addView(center(value, 17, 0xFF1D1A22, true), lp(-1, dp(30)));
-        item.addView(center(caption, 11, 0xFF7B7683, false), lp(-1, dp(22)));
+        item.setPadding(dp(2), dp(10), dp(2), dp(10)); item.setMinimumHeight(dp(128));
+        item.addView(i, lp(dp(42), dp(42))); item.addView(center(value, 17, 0xFF1D1A22, true), lp(-1, -2));
+        item.addView(center(caption, 11, 0xFF7B7683, false), lp(-1, -2));
         stats.addView(item, new LinearLayout.LayoutParams(0, -1, 1));
     }
 
@@ -171,10 +206,12 @@ public final class LibraryView extends FrameLayout {
             LinearLayout box = new LinearLayout(getContext()); box.setOrientation(LinearLayout.VERTICAL); box.setGravity(Gravity.CENTER);
             box.setBackground(round(category == n ? 0xFFFFE9D6 : Color.WHITE, 14));
             TextView icon = center(icons[n], 16, colors[n], true); icon.setBackground(round((colors[n] & 0x00FFFFFF) | 0x16000000, 22));
-            box.addView(icon, lp(dp(38), dp(38))); box.addView(center(names[n], 12, 0xFF39353F, true), lp(-1, dp(25)));
-            box.addView(center(String.valueOf(categoryCount(n)), 11, 0xFF8C8792, false), lp(-1, dp(18)));
+            box.addView(icon, lp(dp(38), dp(38))); box.addView(center(names[n], 12, 0xFF39353F, true), lp(-1, -2));
+            box.addView(center(String.valueOf(categoryCount(n)), 11, 0xFF8C8792, false), lp(-1, -2));
             box.setOnClickListener(v -> { category = index; refresh(); });
-            LinearLayout.LayoutParams pos = lp(dp(92), dp(92)); pos.setMargins(dp(4), 0, dp(4), 0); categories.addView(box, pos);
+            box.setFocusable(true); box.setMinimumHeight(dp(92));
+            box.setContentDescription(getResources().getString(R.string.category_description, names[n], categoryCount(n)));
+            LinearLayout.LayoutParams pos = lp(dp(92), -2); pos.setMargins(dp(4), 0, dp(4), 0); categories.addView(box, pos);
         }
     }
 
@@ -202,7 +239,7 @@ public final class LibraryView extends FrameLayout {
     }
 
     private float readRatio(Comic comic) {
-        return comic.pageCount() == 0 ? 0f : (comic.progress + (comic.lastRead > 0 ? 1 : 0)) / (float) comic.pageCount();
+        return comic.pageCount() == 0 ? 0f : comic.pagesRead() / (float) comic.pageCount();
     }
 
     private void showSortMenu() {
@@ -215,55 +252,92 @@ public final class LibraryView extends FrameLayout {
     }
 
     private void rebuildComics() {
-        comicList.removeAllViews(); List<Comic> items = filtered();
+        displayed = filtered();
         comicsHeading.setText(activeCollection.isEmpty() ? "我的漫画" : "合集 · " + activeCollection);
-        if (items.isEmpty()) {
-            String message = all.isEmpty() ? "书架还是空的\n点击右下角 + 导入漫画" :
-                    (!activeCollection.isEmpty() ? "这个合集还是空的\n从漫画右侧 ⋮ 加入合集" : "没有匹配的漫画");
-            TextView empty = center(message, 15, 0xFF756F80, false);
-            empty.setGravity(Gravity.CENTER); comicList.addView(empty, lp(-1, dp(150))); return;
-        }
-        for (Comic comic : items) comicList.addView(comicRow(comic), rowParams());
+        comicAdapter.notifyDataSetChanged();
     }
 
-    private View comicRow(Comic comic) {
+    private View createComicRow() {
         LinearLayout row = new LinearLayout(getContext()); row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(10), dp(9), dp(7), dp(9)); row.setBackground(round(Color.WHITE, 16));
         ImageView cover = new ImageView(getContext()); cover.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        coverLoader.load(comic.cover(), cover, dp(68), dp(96));
-        cover.setBackground(round(0xFFFFEBDD, 10)); row.addView(cover, lp(dp(68), dp(96)));
+        cover.setBackground(round(0xFFFFEBDD, 10)); row.addView(cover, lp(coverWidth, coverHeight));
 
         LinearLayout words = new LinearLayout(getContext()); words.setOrientation(LinearLayout.VERTICAL); words.setPadding(dp(14), 0, dp(8), 0);
-        words.addView(label(comic.title + (comic.favorite ? "  ★" : ""), 16, 0xFF211E29, true), lp(-1, dp(31)));
-        String status = comic.isUnread() ? "尚未阅读" : "上次读到第 " + (comic.progress + 1) + " 页";
-        if (!comic.collection.isEmpty()) status = "合集 · " + comic.collection + "  ·  " + status;
-        words.addView(label(status, 12, 0xFF7F7A86, false), lp(-1, dp(25)));
+        TextView title = label("", 16, 0xFF211E29, true); words.addView(title, lp(-1, -2));
+        TextView status = label("", 12, 0xFF7F7A86, false); words.addView(status, lp(-1, -2));
         LinearLayout progress = new LinearLayout(getContext()); progress.setGravity(Gravity.CENTER_VERTICAL);
-        TextView bar = new TextView(getContext()); bar.setBackground(progressDrawable(comic));
+        ProgressBar bar = new ProgressBar(getContext(), null, android.R.attr.progressBarStyleHorizontal);
+        bar.setMax(100); bar.setProgressTintList(android.content.res.ColorStateList.valueOf(orange));
+        bar.setProgressBackgroundTintList(android.content.res.ColorStateList.valueOf(0xFFF1E1D5));
         progress.addView(bar, new LinearLayout.LayoutParams(0, dp(4), 1));
-        TextView count = label("  " + (comic.progress + 1) + "/" + comic.pageCount(), 11, 0xFF817C88, false);
+        TextView count = label("", 11, 0xFF817C88, false);
         progress.addView(count, lp(dp(64), dp(28))); words.addView(progress, lp(-1, dp(32)));
         row.addView(words, new LinearLayout.LayoutParams(0, -1, 1));
-        TextView menu = center("⋮", 25, 0xFF8A8590, true); menu.setOnClickListener(v -> actions.manageComic(comic));
-        row.addView(menu, lp(dp(42), -1)); row.setOnClickListener(v -> actions.openComic(comic));
+        Button menu = button("⋮", "管理漫画", 24, 0xFF8A8590);
+        row.addView(menu, lp(dp(48), -1));
+        row.setTag(new ComicRow(cover, title, status, bar, count, menu));
         return row;
     }
 
-    private android.graphics.drawable.Drawable progressDrawable(Comic comic) {
-        android.graphics.drawable.LayerDrawable layers = new android.graphics.drawable.LayerDrawable(new android.graphics.drawable.Drawable[]{
-                round(0xFFF1E1D5, 3), round(ORANGE, 3)});
-        int percent = comic.pageCount() == 0 ? 0 : Math.min(100, Math.round((comic.progress + 1) * 100f / comic.pageCount()));
-        layers.setLayerInset(1, 0, 0, dp((100 - percent) * 1.8f), 0); return layers;
+    private void bindComicRow(View view, Comic comic) {
+        ComicRow row = (ComicRow) view.getTag();
+        coverLoader.load(comic.cover(), row.cover, coverWidth, coverHeight);
+        row.cover.setContentDescription(getResources().getString(R.string.comic_cover_description, comic.title));
+        row.title.setText(comic.favorite ? getResources().getString(R.string.comic_title_favorite, comic.title) : comic.title);
+        String status = comic.isUnread() ? "尚未阅读" : "上次读到第 " + (comic.progress + 1) + " 页";
+        if (!comic.collection.isEmpty()) status = "合集 · " + comic.collection + "  ·  " + status;
+        row.status.setText(status);
+        int read = comic.pagesRead();
+        row.progress.setProgress(comic.pageCount() == 0 ? 0 : Math.round(read * 100f / comic.pageCount()));
+        row.count.setText(getResources().getString(R.string.comic_progress_count, read, comic.pageCount()));
+        row.menu.setContentDescription(getResources().getString(R.string.comic_manage_description, comic.title));
+        row.menu.setOnClickListener(v -> actions.manageComic(comic));
+        view.setContentDescription(getResources().getString(R.string.comic_row_description, comic.title, status));
+        view.setOnClickListener(v -> actions.openComic(comic));
     }
 
-    private LinearLayout.LayoutParams rowParams() {
-        LinearLayout.LayoutParams pos = lp(-1, dp(116)); pos.setMargins(0, 0, 0, dp(10)); return pos;
+    private final class ComicAdapter extends BaseAdapter {
+        @Override public int getCount() { return displayed.isEmpty() ? 1 : displayed.size(); }
+        @Override public Object getItem(int position) { return displayed.isEmpty() ? null : displayed.get(position); }
+        @Override public long getItemId(int position) { return position; }
+        @Override public int getViewTypeCount() { return 2; }
+        @Override public int getItemViewType(int position) { return displayed.isEmpty() ? 0 : 1; }
+        @Override public View getView(int position, View recycled, ViewGroup parent) {
+            if (displayed.isEmpty()) {
+                TextView empty = recycled instanceof TextView ? (TextView) recycled : center("", 15, textSecondary, false);
+                String message = all.isEmpty() ? "书架还是空的\n点击右下角 + 导入漫画" :
+                        (!activeCollection.isEmpty() ? "这个合集还是空的\n从漫画右侧 ⋮ 加入合集" : "没有匹配的漫画");
+                empty.setText(message); empty.setGravity(Gravity.CENTER);
+                empty.setLayoutParams(new ListView.LayoutParams(-1, dp(150)));
+                return empty;
+            }
+            View row = recycled == null ? createComicRow() : recycled;
+            bindComicRow(row, displayed.get(position));
+            row.setPadding(dp(24), dp(9), dp(21), dp(9));
+            row.setMinimumHeight(rowMinHeight);
+            return row;
+        }
+    }
+
+    private static final class ComicRow {
+        final ImageView cover;
+        final TextView title;
+        final TextView status;
+        final ProgressBar progress;
+        final TextView count;
+        final Button menu;
+
+        ComicRow(ImageView cover, TextView title, TextView status, ProgressBar progress, TextView count, Button menu) {
+            this.cover = cover; this.title = title; this.status = status;
+            this.progress = progress; this.count = count; this.menu = menu;
+        }
     }
 
     private void buildFab() {
-        TextView fab = center("+", 34, Color.WHITE, false); fab.setGravity(Gravity.CENTER); fab.setBackground(round(ORANGE, 32));
+        Button fab = button("+", "导入漫画", 32, Color.WHITE); fab.setBackground(round(orange, 32));
         fab.setElevation(dp(10)); fab.setOnClickListener(v -> actions.importComic());
-        FrameLayout.LayoutParams pos = new FrameLayout.LayoutParams(dp(62), dp(62), Gravity.END | Gravity.BOTTOM);
+        FrameLayout.LayoutParams pos = new FrameLayout.LayoutParams(fabSize, fabSize, Gravity.END | Gravity.BOTTOM);
         pos.setMargins(0, 0, dp(22), dp(22)); addView(fab, pos);
     }
 
@@ -276,6 +350,12 @@ public final class LibraryView extends FrameLayout {
     }
     private TextView center(String text, int size, int color, boolean bold) {
         TextView v = label(text, size, color, bold); v.setGravity(Gravity.CENTER); return v;
+    }
+    private Button button(String text, String description, int size, int color) {
+        Button button = new Button(getContext()); button.setText(text); button.setTextSize(size); button.setTextColor(color);
+        button.setAllCaps(false); button.setGravity(Gravity.CENTER); button.setPadding(0, 0, 0, 0);
+        button.setMinWidth(dp(48)); button.setMinHeight(dp(48)); button.setBackgroundColor(Color.TRANSPARENT);
+        button.setContentDescription(description); return button;
     }
     private GradientDrawable round(int color, int radius) {
         GradientDrawable d = new GradientDrawable(); d.setColor(color); d.setCornerRadius(dp(radius)); return d;
