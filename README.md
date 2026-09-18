@@ -8,7 +8,7 @@
 
 ## 版本信息
 
-- 当前版本：`v1.2.0`
+- 最新正式版本与 APK：见 [GitHub Releases](https://github.com/hqzzlys/MangaShelf/releases/latest)
 - Android 要求：Android 8.0（API 26）及以上
 - 目标平台：Android API 37
 - 应用包名：`com.localmanga.shelf`
