@@ -37,6 +37,7 @@ public final class ComicRepository {
     }
     private static final String PREFS = "comic_library_v1";
     private static final String COLLECTIONS = "collections";
+    private static final String TRASH_DIR = ".trash";
     private final Context context;
     private final SharedPreferences prefs;
     private final File root;
@@ -134,6 +135,32 @@ public final class ComicRepository {
 
     public void saveProgress(String id, int page) {
         prefs.edit().putInt(id + ".progress", Math.max(0, page)).putLong(id + ".lastRead", System.currentTimeMillis()).apply();
+    }
+
+    public synchronized Set<Integer> loadBookmarks(String id) {
+        Set<Integer> result = new TreeSet<>();
+        for (String value : prefs.getStringSet(id + ".bookmarks", new HashSet<>())) {
+            try {
+                int page = Integer.parseInt(value);
+                if (page >= 0) result.add(page);
+            } catch (NumberFormatException ignored) {}
+        }
+        return result;
+    }
+
+    public synchronized boolean toggleBookmark(String id, int page) {
+        Set<String> saved = new HashSet<>(prefs.getStringSet(id + ".bookmarks", new HashSet<>()));
+        String value = Integer.toString(Math.max(0, page));
+        boolean added;
+        if (saved.contains(value)) {
+            saved.remove(value);
+            added = false;
+        } else {
+            saved.add(value);
+            added = true;
+        }
+        prefs.edit().putStringSet(id + ".bookmarks", saved).apply();
+        return added;
     }
     public void setFavorite(Comic comic, boolean value) {
         comic.favorite = value; prefs.edit().putBoolean(comic.id + ".favorite", value).apply();
@@ -245,11 +272,59 @@ public final class ComicRepository {
         String clean = name == null ? "" : name.trim();
         return clean.length() > 30 ? clean.substring(0, 30) : clean;
     }
-    public synchronized void delete(Comic comic) {
-        deleteRecursive(comic.directory);
-        prefs.edit().remove(comic.id + ".title").remove(comic.id + ".progress").remove(comic.id + ".imported")
-                .remove(comic.id + ".lastRead").remove(comic.id + ".favorite").remove(comic.id + ".collection")
-                .remove(comic.id + ".mergedSources").apply();
+    public synchronized void delete(Comic comic) throws IOException {
+        File trash = new File(root, TRASH_DIR);
+        if (!trash.exists() && !trash.mkdirs()) throw new IOException("无法创建回收站目录");
+        File target = new File(trash, comic.id);
+        if (target.exists()) throw new IOException("回收站中已存在同一漫画，请先处理后重试");
+        if (!comic.directory.renameTo(target)) throw new IOException("无法将漫画移入回收站，请重试");
+        prefs.edit().putLong(comic.id + ".deletedAt", System.currentTimeMillis()).apply();
+    }
+
+    public synchronized List<Comic> loadTrash() {
+        List<Comic> result = new ArrayList<>();
+        File trash = new File(root, TRASH_DIR);
+        File[] directories = trash.listFiles(File::isDirectory);
+        if (directories == null) return result;
+        for (File directory : directories) {
+            Comic comic = loadDirectory(directory);
+            if (comic != null) result.add(comic);
+        }
+        result.sort((a, b) -> Long.compare(trashDeletedAt(b.id), trashDeletedAt(a.id)));
+        return result;
+    }
+
+    public synchronized long trashDeletedAt(String id) {
+        return prefs.getLong(id + ".deletedAt", 0L);
+    }
+
+    public synchronized void restoreFromTrash(String id) throws IOException {
+        if (!ArchiveUtils.isSafeBackupId(id)) throw new IOException("漫画编号无效");
+        File source = new File(new File(root, TRASH_DIR), id);
+        File target = new File(root, id);
+        if (!source.isDirectory()) throw new IOException("回收站中的漫画已不存在");
+        if (target.exists()) throw new IOException("书架中已有同名漫画，无法恢复");
+        if (!source.renameTo(target)) throw new IOException("无法恢复漫画，请重试");
+        prefs.edit().remove(id + ".deletedAt").apply();
+    }
+
+    public synchronized void permanentlyDeleteFromTrash(String id) throws IOException {
+        if (!ArchiveUtils.isSafeBackupId(id)) throw new IOException("漫画编号无效");
+        File target = new File(new File(root, TRASH_DIR), id);
+        deleteRecursive(target);
+        if (target.exists()) throw new IOException("无法永久删除漫画，请重试");
+        removeMetadata(id);
+    }
+
+    public synchronized void emptyTrash() throws IOException {
+        List<Comic> comics = loadTrash();
+        for (Comic comic : comics) permanentlyDeleteFromTrash(comic.id);
+    }
+
+    private void removeMetadata(String id) {
+        prefs.edit().remove(id + ".title").remove(id + ".progress").remove(id + ".imported")
+                .remove(id + ".lastRead").remove(id + ".favorite").remove(id + ".collection")
+                .remove(id + ".mergedSources").remove(id + ".bookmarks").remove(id + ".deletedAt").apply();
     }
     public long totalBytes(List<Comic> comics) {
         long total = 0; for (Comic comic : comics) for (File page : comic.pages) total += page.length(); return total;

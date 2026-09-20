@@ -131,6 +131,11 @@ final class LibraryBackup {
                     if (restoredId != null) mergedSources.add(restoredId);
                 }
                 editor.putStringSet(targetId + ".mergedSources", mergedSources);
+                Set<String> bookmarks = new HashSet<>();
+                for (Integer bookmark : record.bookmarks) {
+                    if (bookmark >= 0 && bookmark < restoredPages.size()) bookmarks.add(Integer.toString(bookmark));
+                }
+                editor.putStringSet(targetId + ".bookmarks", bookmarks);
             }
             if (!editor.commit()) throw new IOException("无法保存恢复后的书架信息");
             deleteRecursive(temporary);
@@ -165,6 +170,14 @@ final class LibraryBackup {
                 JSONArray sources = new JSONArray();
                 for (String source : preferences.getStringSet(comic.id + ".mergedSources", new HashSet<>())) sources.put(source);
                 item.put("mergedSources", sources);
+                JSONArray bookmarks = new JSONArray();
+                for (String bookmark : preferences.getStringSet(comic.id + ".bookmarks", new HashSet<>())) {
+                    try {
+                        int page = Integer.parseInt(bookmark);
+                        if (page >= 0 && page < comic.pageCount()) bookmarks.put(page);
+                    } catch (NumberFormatException ignored) {}
+                }
+                item.put("bookmarks", bookmarks);
                 items.put(item);
             }
             manifest.put("comics", items);
@@ -284,6 +297,13 @@ final class LibraryBackup {
                     if (ArchiveUtils.isSafeBackupId(mergedSource)) record.mergedSources.add(mergedSource);
                 }
             }
+            JSONArray bookmarks = item.optJSONArray("bookmarks");
+            if (bookmarks != null) {
+                for (int bookmarkIndex = 0; bookmarkIndex < bookmarks.length(); bookmarkIndex++) {
+                    int bookmark = bookmarks.optInt(bookmarkIndex, -1);
+                    if (bookmark >= 0 && bookmark < pages.size()) record.bookmarks.add(bookmark);
+                }
+            }
             records.add(record);
         }
         return records;
@@ -294,6 +314,8 @@ final class LibraryBackup {
         Set<String> reserved = new HashSet<>();
         File[] existing = root.listFiles(File::isDirectory);
         if (existing != null) for (File directory : existing) reserved.add(directory.getName());
+        File[] trashed = new File(root, ".trash").listFiles(File::isDirectory);
+        if (trashed != null) for (File directory : trashed) reserved.add(directory.getName());
         for (RestoreRecord record : records) {
             String targetId = record.sourceId;
             while (reserved.contains(targetId)) targetId = System.currentTimeMillis() + "-" + UUID.randomUUID().toString().substring(0, 8);
@@ -340,6 +362,7 @@ final class LibraryBackup {
         final String title;
         final File directory;
         final Set<String> mergedSources = new HashSet<>();
+        final Set<Integer> bookmarks = new HashSet<>();
         File restoredDirectory;
         int progress;
         long importedAt;

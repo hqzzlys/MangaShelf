@@ -184,7 +184,7 @@ public final class MainActivity extends Activity implements LibraryView.Actions,
         String favorite = comic.favorite ? "取消收藏" : "加入收藏";
         new AlertDialog.Builder(this).setTitle(comic.title)
                 .setItems(new String[]{favorite, comic.collection.isEmpty() ? "加入合集" : "更改合集 · " + comic.collection,
-                        "合并到另一漫画", "重命名", "删除漫画"}, (d, which) -> {
+                        "合并到另一漫画", "重命名", "移入回收站"}, (d, which) -> {
                     if (which == 0) { repository.setFavorite(comic, !comic.favorite); reload(); }
                     else if (which == 1) chooseCollection(comic);
                     else if (which == 2) chooseMergeTarget(comic);
@@ -248,10 +248,10 @@ public final class MainActivity extends Activity implements LibraryView.Actions,
     }
 
     private void confirmDelete(Comic comic) {
-        new AlertDialog.Builder(this).setTitle("删除《" + comic.title + "》？")
-                .setMessage("解压后的图片和阅读进度将从本机永久删除。")
+        new AlertDialog.Builder(this).setTitle(getString(R.string.comic_move_to_trash_title, comic.title))
+                .setMessage(R.string.comic_move_to_trash_message)
                 .setNegativeButton("取消", null)
-                .setPositiveButton("删除", (d, w) -> tasks.delete(comic)).show();
+                .setPositiveButton(R.string.comic_move_to_trash, (d, w) -> tasks.delete(comic)).show();
     }
 
     @Override public void createCollection() {
@@ -339,11 +339,56 @@ public final class MainActivity extends Activity implements LibraryView.Actions,
 
     @Override public void showInfo() {
         new AlertDialog.Builder(this).setTitle("漫匣")
-                .setItems(new String[]{"密码设置", "书架备份与恢复", "功能介绍", "关于本软件"}, (dialog, which) -> {
+                .setItems(new String[]{"密码设置", "书架备份与恢复", getString(R.string.trash_menu), "功能介绍", "关于本软件"}, (dialog, which) -> {
                     if (which == 0) showPasswordSettings();
                     else if (which == 1) showBackupOptions();
-                    else if (which == 2) showOnboarding(); else showAbout();
+                    else if (which == 2) showTrash();
+                    else if (which == 3) showOnboarding(); else showAbout();
                 }).show();
+    }
+
+    private void showTrash() {
+        List<Comic> trashed = repository.loadTrash();
+        if (trashed.isEmpty()) {
+            new AlertDialog.Builder(this).setTitle(R.string.trash_title)
+                    .setMessage(R.string.trash_empty_message)
+                    .setPositiveButton("知道了", null).show();
+            return;
+        }
+        String[] labels = new String[trashed.size()];
+        for (int index = 0; index < trashed.size(); index++) {
+            Comic comic = trashed.get(index);
+            labels[index] = getString(R.string.trash_comic_label, comic.title, comic.pageCount());
+        }
+        new AlertDialog.Builder(this).setTitle(R.string.trash_title)
+                .setItems(labels, (dialog, which) -> manageTrashedComic(trashed.get(which)))
+                .setNeutralButton(R.string.trash_empty, (dialog, which) -> confirmEmptyTrash())
+                .setNegativeButton("取消", null).show();
+    }
+
+    private void manageTrashedComic(Comic comic) {
+        new AlertDialog.Builder(this).setTitle(comic.title)
+                .setItems(new String[]{getString(R.string.trash_restore), getString(R.string.trash_delete_forever)},
+                        (dialog, which) -> {
+                            if (which == 0) tasks.restoreTrash(comic);
+                            else confirmPermanentDelete(comic);
+                        })
+                .setNegativeButton("取消", null).show();
+    }
+
+    private void confirmPermanentDelete(Comic comic) {
+        new AlertDialog.Builder(this).setTitle(getString(R.string.trash_delete_title, comic.title))
+                .setMessage(R.string.trash_delete_message)
+                .setNegativeButton("取消", null)
+                .setPositiveButton(R.string.trash_delete_forever,
+                        (dialog, which) -> tasks.permanentlyDeleteTrash(comic)).show();
+    }
+
+    private void confirmEmptyTrash() {
+        new AlertDialog.Builder(this).setTitle(R.string.trash_empty_title)
+                .setMessage(R.string.trash_empty_confirm)
+                .setNegativeButton("取消", null)
+                .setPositiveButton(R.string.trash_empty, (dialog, which) -> tasks.emptyTrash()).show();
     }
 
     private void showBackupOptions() {
@@ -357,7 +402,7 @@ public final class MainActivity extends Activity implements LibraryView.Actions,
 
     private void confirmCreateBackup() {
         new AlertDialog.Builder(this).setTitle("导出完整书架备份？")
-                .setMessage("备份包含漫画图片、标题、合集、收藏和阅读进度，不包含应用密码。备份文件未加密，请保存到安全位置。")
+                .setMessage("备份包含漫画图片、标题、合集、收藏、阅读进度和书签，不包含应用密码。备份文件未加密，请保存到安全位置。")
                 .setNegativeButton("取消", null)
                 .setPositiveButton("选择保存位置", (dialog, which) -> createBackupDocument()).show();
     }

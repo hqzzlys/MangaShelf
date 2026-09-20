@@ -146,9 +146,34 @@ final class LibraryTaskController {
     }
 
     void delete(Comic comic) {
-        start("正在删除漫画", "正在删除《" + comic.title + "》…", false, () -> {
+        start("正在移入回收站", "正在移动《" + comic.title + "》…", false, () -> {
             repository.delete(comic);
             publishSnapshot();
+            event(new Event("", "已移入回收站，可从应用菜单恢复。", true));
+        });
+    }
+
+    void restoreTrash(Comic comic) {
+        start("正在恢复漫画", "正在恢复《" + comic.title + "》…", false, () -> {
+            repository.restoreFromTrash(comic.id);
+            publishSnapshot();
+            event(new Event("", "《" + comic.title + "》已恢复到书架。", true));
+        });
+    }
+
+    void permanentlyDeleteTrash(Comic comic) {
+        start("正在永久删除", "正在永久删除《" + comic.title + "》…", false, () -> {
+            repository.permanentlyDeleteFromTrash(comic.id);
+            publishSnapshot();
+            event(new Event("", "《" + comic.title + "》已永久删除。", true));
+        });
+    }
+
+    void emptyTrash() {
+        start("正在清空回收站", "正在永久删除回收站中的漫画…", false, () -> {
+            repository.emptyTrash();
+            publishSnapshot();
+            event(new Event("", "回收站已清空。", true));
         });
     }
 
