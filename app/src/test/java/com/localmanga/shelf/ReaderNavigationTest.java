@@ -21,6 +21,18 @@ public class ReaderNavigationTest {
         assertEquals(0, ReaderNavigation.deltaForSwipe(0f, false));
     }
 
+    @Test public void autoTurnAcceptsCustomSecondsWithinBounds() {
+        assertEquals(1, ReaderNavigation.parseAutoTurnSeconds("1"));
+        assertEquals(17, ReaderNavigation.parseAutoTurnSeconds(" 17 "));
+        assertEquals(3600, ReaderNavigation.parseAutoTurnSeconds("3600"));
+    }
+
+    @Test public void autoTurnRejectsInvalidAndOverflowingInput() {
+        for (String input : new String[]{"", " ", "0", "-1", "3601", "1.5", "abc", "999999999999999"}) {
+            assertEquals(input, 0, ReaderNavigation.parseAutoTurnSeconds(input));
+        }
+    }
+
     @Test public void requestedPageIsClampedToLibraryBounds() {
         assertEquals(0, ReaderNavigation.clampPage(-3, 10));
         assertEquals(4, ReaderNavigation.clampPage(4, 10));

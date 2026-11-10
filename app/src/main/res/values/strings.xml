@@ -73,4 +73,11 @@
     <string name="comic_cover_description">《%1$s》封面</string>
     <string name="comic_manage_description">管理《%1$s》</string>
     <string name="comic_row_description">《%1$s》，%2$s</string>
+    <string name="reader_auto_turn">自动翻页</string>
+    <string name="reader_auto_turn_seconds">翻页间隔（秒）</string>
+    <string name="reader_auto_turn_hint">输入 1–3600 的整数。分页与连续阅读均按顺序进入下一页，到末页自动停止。触摸页面、打开菜单或离开应用会暂停，再次开始需手动开启。</string>
+    <string name="reader_auto_turn_start">开始</string>
+    <string name="reader_auto_turn_pause">暂停自动翻页 · %1$d 秒</string>
+    <string name="reader_auto_turn_invalid">请输入 1–3600 的整数秒数</string>
+    <string name="reader_auto_turn_last_page">已到最后一页，请先返回前面的页面</string>
 </resources>

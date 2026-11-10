@@ -30,6 +30,11 @@ final class ReaderSettings {
     boolean isLandscape() { return preferences.getBoolean(prefix + "landscape", false); }
     void setLandscape(boolean value) { preferences.edit().putBoolean(prefix + "landscape", value).apply(); }
 
+    int autoTurnSeconds() { return preferences.getInt(prefix + "autoTurnSeconds", 5); }
+    void setAutoTurnSeconds(int value) {
+        preferences.edit().putInt(prefix + "autoTurnSeconds", value).apply();
+    }
+
     int brightnessPercent() {
         return Math.max(5, Math.min(100, preferences.getInt(prefix + "brightness", 70)));
     }
