@@ -14,6 +14,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.text.InputType;
 import android.util.LruCache;
+import android.util.SparseArray;
 import android.view.GestureDetector;
 import android.view.Gravity;
 import android.view.KeyEvent;
@@ -40,6 +41,7 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
@@ -75,16 +77,13 @@ public final class ReaderActivity extends Activity {
     private final Handler autoTurnHandler = new Handler(Looper.getMainLooper());
     private int page;
     private boolean autoTurning;
-    private final Runnable autoTurnTask = () -> {
-        if (!autoTurning) return;
-        if (!hasWindowFocus() || page >= comic.pageCount() - 1) {
-            stopAutoTurn();
-            return;
-        }
-        // Give a slow image decode a full interval instead of skipping an unread page.
-        if (pageCache.get(page) == null) scheduleAutoTurn();
-        else showPage(page + 1);
-    };
+    private boolean autoTurnScheduled;
+    private final Set<Integer> failedPages = new HashSet<>();
+    private final SparseArray<int[]> pageSizes = new SparseArray<>();
+    private PageStatusView pagedStatus;
+    private Bitmap pagedBitmap;
+    private int restorePage = -1;
+    private float restoreFraction;
     private SeekBar progress;
     private ScaleGestureDetector scaleDetector;
     private GestureDetector gestureDetector;
@@ -101,6 +100,21 @@ public final class ReaderActivity extends Activity {
     private float touchDownX;
     private float touchDownY;
     private int touchSlop;
+
+    private final Runnable autoTurnTask = () -> {
+        autoTurnScheduled = false;
+        if (!autoTurning) return;
+        if (!hasWindowFocus()) { stopAutoTurn(); return; }
+        if (!visiblePagesReady()) return;
+        if (continuousMode) {
+            if (!continuousView.canScrollVertically(1)) { stopAutoTurn(); return; }
+            int viewport = continuousView.getHeight() - continuousView.getPaddingTop()
+                    - continuousView.getPaddingBottom();
+            continuousView.scrollListBy(ReaderNavigation.scrollStep(viewport));
+            continuousView.post(this::scheduleAutoTurn);
+        } else if (page < comic.pageCount() - 1) showPage(page + 1);
+        else stopAutoTurn();
+    };
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -146,6 +160,8 @@ public final class ReaderActivity extends Activity {
         pageView.setBackgroundColor(Color.BLACK);
         pageView.setContentDescription(getString(R.string.reader_page_description));
         root.addView(pageView, new FrameLayout.LayoutParams(-1, -1));
+        pagedStatus = new PageStatusView();
+        root.addView(pagedStatus, new FrameLayout.LayoutParams(-1, -2, Gravity.CENTER));
         configurePageGestures();
         pageView.setOnClickListener(view -> toggleChrome());
 
@@ -156,22 +172,30 @@ public final class ReaderActivity extends Activity {
         continuousView.setDividerHeight(0);
         continuousView.setFastScrollEnabled(true);
         continuousView.setOnTouchListener((view, event) -> {
-            if (event.getActionMasked() == MotionEvent.ACTION_DOWN) stopAutoTurn();
+            if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                stopAutoTurn();
+                restorePage = -1;
+                selectingContinuousPage = false;
+            }
             return false;
         });
         continuousAdapter = new ContinuousPageAdapter();
         continuousView.setAdapter(continuousAdapter);
         continuousView.setOnItemClickListener((parent, view, position, id) -> toggleChrome());
         continuousView.setOnScrollListener(new AbsListView.OnScrollListener() {
-            @Override public void onScrollStateChanged(AbsListView view, int scrollState) {}
+            @Override public void onScrollStateChanged(AbsListView view, int scrollState) {
+                if (scrollState == SCROLL_STATE_IDLE) saveContinuousPosition();
+                else {
+                    stopAutoTurn();
+                    restorePage = -1;
+                    selectingContinuousPage = false;
+                }
+            }
             @Override public void onScroll(AbsListView view, int firstVisibleItem,
                     int visibleItemCount, int totalItemCount) {
                 if (!continuousMode || selectingContinuousPage || totalItemCount == 0) return;
-                int current = firstVisibleItem;
-                View first = view.getChildAt(0);
-                if (first != null && -first.getTop() > first.getHeight() / 2
-                        && current + 1 < totalItemCount) current++;
-                updateCurrentPageFromScroll(current);
+                updateCurrentPageFromScroll(firstVisibleItem);
+                scheduleAutoTurn();
                 int last = Math.min(totalItemCount - 1, firstVisibleItem + visibleItemCount + 1);
                 for (int index = Math.max(0, firstVisibleItem - 1); index <= last; index++) queuePage(index);
             }
@@ -184,6 +208,7 @@ public final class ReaderActivity extends Activity {
         root.addView(controls, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
         setContentView(root);
         WindowInsetsHelper.enableEdgeToEdge(getWindow(), root);
+        root.post(this::updateContinuousPadding);
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -296,14 +321,20 @@ public final class ReaderActivity extends Activity {
         seekRow.addView(remainLabel, lp(dp(78), dp(36)));
         seekRow.setMinimumHeight(dp(48));
         panel.addView(seekRow, lp(-1, -2));
-        autoTurnButton = actionButton(getString(R.string.reader_auto_turn),
-                getString(R.string.reader_auto_turn), 14);
+        autoTurnButton = actionButton(getString(R.string.reader_auto_turn_continue),
+                getString(R.string.reader_auto_turn_continue), 14);
         autoTurnButton.setTextColor(0xFFFF9A45);
         autoTurnButton.setOnClickListener(v -> {
             if (autoTurning) stopAutoTurn();
-            else showAutoTurnDialog();
+            else startAutoTurn();
         });
-        panel.addView(autoTurnButton, lp(-1, dp(48)));
+        LinearLayout autoRow = new LinearLayout(this);
+        autoRow.addView(autoTurnButton, new LinearLayout.LayoutParams(0, dp(48), 1));
+        Button interval = actionButton(getString(R.string.reader_auto_turn_interval),
+                getString(R.string.reader_auto_turn_seconds), 14);
+        interval.setOnClickListener(v -> showAutoTurnDialog());
+        autoRow.addView(interval, lp(dp(96), dp(48)));
+        panel.addView(autoRow, lp(-1, -2));
         progress.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar seekBar, int value, boolean fromUser) {
                 if (fromUser) updateLabels(value);
@@ -344,13 +375,13 @@ public final class ReaderActivity extends Activity {
         }
         pageView.setVisibility(continuousMode ? View.GONE : View.VISIBLE);
         continuousView.setVisibility(continuousMode ? View.VISIBLE : View.GONE);
+        pagedStatus.setVisibility(View.GONE);
+        updateContinuousPadding();
         if (continuousMode) {
             continuousAdapter.notifyDataSetChanged();
-            selectingContinuousPage = true;
-            continuousView.post(() -> {
-                if (!destroyed) continuousView.setSelection(page);
-                selectingContinuousPage = false;
-            });
+            float fraction = initial && settings.continuousPage() == page
+                    ? settings.continuousOffset() : 0f;
+            positionContinuousPage(page, fraction);
             updateLabels(page);
             updateBookmarkButton();
             queuePage(page);
@@ -358,20 +389,54 @@ public final class ReaderActivity extends Activity {
         } else showPage(page);
     }
 
+    private void updateContinuousPadding() {
+        if (continuousView == null || topBar == null || controls == null) return;
+        continuousView.setPadding(0, chromeVisible ? topBar.getHeight() : 0,
+                0, chromeVisible ? controls.getHeight() : 0);
+    }
+
+    private void positionContinuousPage(int index, float fraction) {
+        restorePage = index;
+        restoreFraction = fraction;
+        selectingContinuousPage = true;
+        continuousView.setSelectionFromTop(index, 0);
+        continuousView.post(this::restoreContinuousPosition);
+    }
+
+    private void restoreContinuousPosition() {
+        if (destroyed || restorePage < 0 || !continuousMode) return;
+        int index = restorePage;
+        if (bitmapForPage(index) == null && !failedPages.contains(index)) return;
+        continuousView.setSelectionFromTop(index,
+                -ReaderNavigation.offsetPixels(restoreFraction, continuousPageHeight(index)));
+        continuousView.post(() -> {
+            if (destroyed || restorePage != index) return;
+            restorePage = -1;
+            selectingContinuousPage = false;
+            scheduleAutoTurn();
+        });
+    }
+
+    private void saveContinuousPosition() {
+        if (!continuousMode || settings == null || continuousView == null || restorePage >= 0) return;
+        View first = continuousView.getChildAt(0);
+        if (first == null) return;
+        int index = continuousView.getFirstVisiblePosition();
+        settings.setContinuousPosition(index, ReaderNavigation.offsetFraction(
+                continuousView.getPaddingTop() - first.getTop(), first.getHeight()));
+        repository.saveProgress(comic.id, index);
+    }
+
     private void showPage(int requested) {
+        cancelAutoTurnTick();
         int next = ReaderNavigation.clampPage(requested, comic.pageCount());
+        Bitmap cached = bitmapForPage(next);
         page = next;
-        if (autoTurning) {
-            if (next >= comic.pageCount() - 1) stopAutoTurn();
-            else scheduleAutoTurn();
-        }
         updateLabels(next);
         updateBookmarkButton();
         repository.saveProgress(comic.id, next);
         if (continuousMode) {
-            selectingContinuousPage = true;
-            continuousView.setSelection(next);
-            continuousView.post(() -> selectingContinuousPage = false);
+            positionContinuousPage(next, 0f);
             queuePage(next);
             queuePage(next + 1);
             return;
@@ -380,12 +445,14 @@ public final class ReaderActivity extends Activity {
                 R.string.reader_page_position_description, next + 1, comic.pageCount()));
         worker.getQueue().clear();
         decodingPages.clear();
-        Bitmap cached = pageCache.get(next);
-        if (cached != null && !cached.isRecycled()) pageView.setImageBitmap(cached);
+        pagedBitmap = cached;
+        if (cached != null) pageView.setImageBitmap(cached);
         else {
             pageView.setImageDrawable(null);
             queuePage(next);
         }
+        pagedStatus.bind(next);
+        pageView.post(this::scheduleAutoTurn);
         queuePage(next + 1);
         queuePage(next - 1);
     }
@@ -394,19 +461,27 @@ public final class ReaderActivity extends Activity {
         int next = ReaderNavigation.clampPage(value, comic.pageCount());
         if (page == next) return;
         page = next;
-        if (autoTurning) {
-            if (next >= comic.pageCount() - 1) stopAutoTurn();
-            else scheduleAutoTurn();
-        }
         updateLabels(next);
         updateBookmarkButton();
         repository.saveProgress(comic.id, next);
     }
 
+    private Bitmap bitmapForPage(int index) {
+        Bitmap bitmap = pageCache.get(index);
+        if (bitmap != null) return bitmap;
+        if (!continuousMode) return page == index ? pagedBitmap : null;
+        if (continuousView != null) {
+            for (int child = 0; child < continuousView.getChildCount(); child++) {
+                PageCell cell = (PageCell) continuousView.getChildAt(child);
+                if (cell.index == index && cell.generation == decodeGeneration.get()) return cell.bitmap;
+            }
+        }
+        return null;
+    }
+
     private void queuePage(int index) {
         if (destroyed || index < 0 || index >= comic.pageCount()) return;
-        Bitmap cached = pageCache.get(index);
-        if (cached != null && !cached.isRecycled()) return;
+        if (failedPages.contains(index) || bitmapForPage(index) != null) return;
         int targetWidth = getResources().getDisplayMetrics().widthPixels;
         int targetHeight = getResources().getDisplayMetrics().heightPixels;
         File file = comic.pages.get(index);
@@ -419,15 +494,29 @@ public final class ReaderActivity extends Activity {
             worker.execute(() -> {
                 try {
                     Bitmap bitmap = decodePage(file, targetWidth, targetHeight, crop, continuous);
-                    if (bitmap == null || destroyed || generation != decodeGeneration.get()) {
+                    if (destroyed || generation != decodeGeneration.get()) {
                         if (bitmap != null) bitmap.recycle();
                         return;
                     }
-                    pageCache.put(index, bitmap);
+                    if (bitmap != null) pageCache.put(index, bitmap);
                     runOnUiThread(() -> {
                         if (destroyed || generation != decodeGeneration.get()) return;
-                        if (continuousMode) continuousAdapter.notifyDataSetChanged();
-                        else if (page == index) pageView.setImageBitmap(bitmap);
+                        if (bitmap == null) failedPages.add(index);
+                        else pageSizes.put(index, new int[]{bitmap.getWidth(), bitmap.getHeight()});
+                        if (continuousMode) {
+                            for (int child = 0; child < continuousView.getChildCount(); child++) {
+                                PageCell cell = (PageCell) continuousView.getChildAt(child);
+                                if (cell.index == index) cell.bind(index, bitmap);
+                            }
+                            continuousView.post(this::restoreContinuousPosition);
+                        } else if (page == index) {
+                            pagedBitmap = bitmap;
+                            if (bitmap != null) pageView.setImageBitmap(bitmap);
+                            pagedStatus.bind(index);
+                        }
+                        if (bitmap == null && page == index) stopAutoTurn();
+                        // Start the interval after layout has displayed the decoded page.
+                        pageView.post(this::scheduleAutoTurn);
                     });
                 } finally {
                     decodingPages.remove(requestKey);
@@ -466,32 +555,91 @@ public final class ReaderActivity extends Activity {
         return cropped;
     }
 
+    private int continuousPageHeight(int index) {
+        int width = Math.max(1, continuousView.getWidth());
+        int[] size = pageSizes.get(index);
+        return size == null ? Math.max(dp(160), width * 4 / 3)
+                : Math.max(1, Math.round(width * (size[1] / (float) size[0])));
+    }
+
+    private final class PageStatusView extends LinearLayout {
+        private final TextView message;
+        private final Button retry;
+        private final Button skip;
+        PageStatusView() {
+            super(ReaderActivity.this);
+            setOrientation(VERTICAL);
+            setGravity(Gravity.CENTER);
+            setPadding(dp(16), dp(12), dp(16), dp(12));
+            setBackgroundColor(0xDD121212);
+            message = text("", 15, Color.WHITE, false);
+            message.setGravity(Gravity.CENTER);
+            message.setMaxLines(4);
+            addView(message, lp(-1, -2));
+            LinearLayout actions = new LinearLayout(ReaderActivity.this);
+            retry = actionButton(getString(R.string.reader_retry_page),
+                    getString(R.string.reader_retry_page), 14);
+            skip = actionButton(getString(R.string.reader_skip_page),
+                    getString(R.string.reader_skip_page), 14);
+            actions.addView(retry, new LinearLayout.LayoutParams(0, dp(48), 1));
+            actions.addView(skip, new LinearLayout.LayoutParams(0, dp(48), 1));
+            addView(actions, lp(-1, -2));
+        }
+        void bind(int index) {
+            if (bitmapForPage(index) != null) { setVisibility(GONE); return; }
+            boolean failed = failedPages.contains(index);
+            setVisibility(VISIBLE);
+            message.setText(getString(failed ? R.string.reader_page_failed
+                    : R.string.reader_page_loading, index + 1));
+            retry.setVisibility(failed ? VISIBLE : GONE);
+            skip.setVisibility(failed && index + 1 < comic.pageCount() ? VISIBLE : GONE);
+            retry.setOnClickListener(v -> {
+                stopAutoTurn();
+                failedPages.remove(index);
+                bind(index);
+                queuePage(index);
+            });
+            skip.setOnClickListener(v -> { stopAutoTurn(); showPage(index + 1); });
+        }
+    }
+
+    private final class PageCell extends FrameLayout {
+        final ImageView image;
+        final PageStatusView status;
+        int index = -1;
+        int generation = -1;
+        Bitmap bitmap;
+        PageCell() {
+            super(ReaderActivity.this);
+            image = new ImageView(ReaderActivity.this);
+            image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            image.setBackgroundColor(Color.BLACK);
+            addView(image, new FrameLayout.LayoutParams(-1, -1));
+            status = new PageStatusView();
+            addView(status, new FrameLayout.LayoutParams(-1, -2, Gravity.CENTER));
+        }
+        void bind(int position, Bitmap value) {
+            index = position;
+            generation = decodeGeneration.get();
+            bitmap = value;
+            image.setImageBitmap(value);
+            image.setContentDescription(getString(R.string.reader_page_position_description,
+                    position + 1, comic.pageCount()));
+            setLayoutParams(new AbsListView.LayoutParams(-1, continuousPageHeight(position)));
+            status.bind(position);
+        }
+    }
+
     private final class ContinuousPageAdapter extends BaseAdapter {
         @Override public int getCount() { return comic.pageCount(); }
         @Override public Object getItem(int position) { return comic.pages.get(position); }
         @Override public long getItemId(int position) { return position; }
         @Override public View getView(int position, View convertView, ViewGroup parent) {
-            ImageView image;
-            if (convertView instanceof ImageView) image = (ImageView) convertView;
-            else {
-                image = new ImageView(ReaderActivity.this);
-                image.setAdjustViewBounds(true);
-                image.setScaleType(ImageView.ScaleType.FIT_CENTER);
-                image.setBackgroundColor(Color.BLACK);
-                image.setMinimumHeight(Math.max(dp(120),
-                        getResources().getDisplayMetrics().widthPixels * 4 / 3));
-                image.setPadding(0, 0, 0, dp(3));
-                image.setLayoutParams(new AbsListView.LayoutParams(-1, -2));
-            }
-            image.setContentDescription(getString(
-                    R.string.reader_page_position_description, position + 1, comic.pageCount()));
-            Bitmap cached = pageCache.get(position);
-            if (cached != null && !cached.isRecycled()) image.setImageBitmap(cached);
-            else {
-                image.setImageDrawable(null);
-                queuePage(position);
-            }
-            return image;
+            Bitmap bitmap = bitmapForPage(position);
+            PageCell cell = convertView instanceof PageCell ? (PageCell) convertView : new PageCell();
+            cell.bind(position, bitmap);
+            if (bitmap == null) queuePage(position);
+            return cell;
         }
     }
 
@@ -598,6 +746,7 @@ public final class ReaderActivity extends Activity {
     private void toggleChrome() {
         if (!chromeVisible) stopAutoTurn();
         chromeVisible = !chromeVisible;
+        updateContinuousPadding();
         topBar.animate().alpha(chromeVisible ? 1 : 0)
                 .translationY(chromeVisible ? 0 : -topBar.getHeight()).setDuration(180).start();
         controls.animate().alpha(chromeVisible ? 1 : 0)
@@ -661,7 +810,7 @@ public final class ReaderActivity extends Activity {
                         getString(R.string.reader_crop_setting, crop),
                         getString(R.string.reader_direction_setting, direction),
                         getString(R.string.reader_bookmarks_setting, bookmarks.size()),
-                        getString(R.string.reader_auto_turn),
+                        getString(R.string.reader_auto_turn_seconds),
                         getString(R.string.reader_help)
                 }, (dialog, which) -> {
                     if (which == 0) {
@@ -691,10 +840,6 @@ public final class ReaderActivity extends Activity {
 
     private void showAutoTurnDialog() {
         stopAutoTurn();
-        if (page >= comic.pageCount() - 1) {
-            Toast.makeText(this, R.string.reader_auto_turn_last_page, Toast.LENGTH_SHORT).show();
-            return;
-        }
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
         content.setPadding(dp(24), dp(8), dp(24), 0);
@@ -727,32 +872,64 @@ public final class ReaderActivity extends Activity {
                     }
                     settings.setAutoTurnSeconds(interval);
                     dialog.dismiss();
-                    // Stop any continuous-mode fling before beginning timed page jumps.
-                    showPage(page);
-                    autoTurning = true;
-                    autoTurnButton.setText(getString(R.string.reader_auto_turn_pause, interval));
-                    autoTurnButton.setContentDescription(autoTurnButton.getText());
-                    scheduleAutoTurn();
+                    startAutoTurn();
                 }));
         dialog.show();
     }
 
+    private void startAutoTurn() {
+        if (!continuousMode && page >= comic.pageCount() - 1
+                || continuousMode && restorePage < 0 && !continuousView.canScrollVertically(1)) {
+            Toast.makeText(this, R.string.reader_auto_turn_last_page, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        autoTurning = true;
+        autoTurnButton.setText(getString(R.string.reader_auto_turn_pause, settings.autoTurnSeconds()));
+        autoTurnButton.setContentDescription(autoTurnButton.getText());
+        if (chromeVisible) toggleChrome();
+        continuousView.post(this::scheduleAutoTurn);
+    }
+
+    private boolean visiblePagesReady() {
+        if (!continuousMode) {
+            if (failedPages.contains(page)) stopAutoTurn();
+            return pagedBitmap != null;
+        }
+        if (selectingContinuousPage || continuousView.getChildCount() == 0) return false;
+        boolean ready = true;
+        for (int child = 0; child < continuousView.getChildCount(); child++) {
+            PageCell cell = (PageCell) continuousView.getChildAt(child);
+            if (cell.getBottom() <= continuousView.getPaddingTop()
+                    || cell.getTop() >= continuousView.getHeight() - continuousView.getPaddingBottom()) continue;
+            if (failedPages.contains(cell.index)) { stopAutoTurn(); return false; }
+            if (cell.bitmap == null) ready = false;
+        }
+        return ready;
+    }
+
     private void scheduleAutoTurn() {
-        autoTurnHandler.removeCallbacks(autoTurnTask);
+        if (!autoTurning || autoTurnScheduled || !visiblePagesReady()) return;
+        autoTurnScheduled = true;
         autoTurnHandler.postDelayed(autoTurnTask, settings.autoTurnSeconds() * 1000L);
+    }
+
+    private void cancelAutoTurnTick() {
+        autoTurnHandler.removeCallbacks(autoTurnTask);
+        autoTurnScheduled = false;
     }
 
     private void stopAutoTurn() {
         autoTurning = false;
-        autoTurnHandler.removeCallbacks(autoTurnTask);
+        cancelAutoTurnTick();
         if (autoTurnButton != null) {
-            autoTurnButton.setText(R.string.reader_auto_turn);
-            autoTurnButton.setContentDescription(getString(R.string.reader_auto_turn));
+            autoTurnButton.setText(R.string.reader_auto_turn_continue);
+            autoTurnButton.setContentDescription(getString(R.string.reader_auto_turn_continue));
         }
     }
 
     @Override protected void onPause() {
         stopAutoTurn();
+        saveContinuousPosition();
         super.onPause();
     }
 
@@ -773,6 +950,9 @@ public final class ReaderActivity extends Activity {
         decodingPages.clear();
         pageView.setImageDrawable(null);
         pageCache.evictAll();
+        pagedBitmap = null;
+        pageSizes.clear();
+        failedPages.clear();
     }
 
     @Override public boolean onKeyDown(int keyCode, KeyEvent event) {
@@ -836,6 +1016,7 @@ public final class ReaderActivity extends Activity {
 
     @Override protected void onDestroy() {
         stopAutoTurn();
+        saveContinuousPosition();
         destroyed = true;
         if (repository != null && comic != null) repository.saveProgress(comic.id, page);
         if (pageView != null) pageView.setImageDrawable(null);
