@@ -10,6 +10,9 @@ import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.text.InputType;
 import android.util.LruCache;
 import android.view.GestureDetector;
 import android.view.Gravity;
@@ -24,6 +27,7 @@ import android.widget.AbsListView;
 import android.widget.BaseAdapter;
 import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.EditText;
 import android.widget.GridView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -67,12 +71,25 @@ public final class ReaderActivity extends Activity {
     private TextView pageLabel;
     private TextView remainLabel;
     private Button bookmarkButton;
+    private Button autoTurnButton;
+    private final Handler autoTurnHandler = new Handler(Looper.getMainLooper());
+    private int page;
+    private boolean autoTurning;
+    private final Runnable autoTurnTask = () -> {
+        if (!autoTurning) return;
+        if (!hasWindowFocus() || page >= comic.pageCount() - 1) {
+            stopAutoTurn();
+            return;
+        }
+        // Give a slow image decode a full interval instead of skipping an unread page.
+        if (pageCache.get(page) == null) scheduleAutoTurn();
+        else showPage(page + 1);
+    };
     private SeekBar progress;
     private ScaleGestureDetector scaleDetector;
     private GestureDetector gestureDetector;
     private CoverLoader thumbnailLoader;
     private Set<Integer> bookmarks;
-    private int page;
     private boolean chromeVisible = true;
     private boolean continuousMode;
     private boolean autoCrop;
@@ -138,6 +155,10 @@ public final class ReaderActivity extends Activity {
         continuousView.setDivider(null);
         continuousView.setDividerHeight(0);
         continuousView.setFastScrollEnabled(true);
+        continuousView.setOnTouchListener((view, event) -> {
+            if (event.getActionMasked() == MotionEvent.ACTION_DOWN) stopAutoTurn();
+            return false;
+        });
         continuousAdapter = new ContinuousPageAdapter();
         continuousView.setAdapter(continuousAdapter);
         continuousView.setOnItemClickListener((parent, view, position, id) -> toggleChrome());
@@ -204,6 +225,7 @@ public final class ReaderActivity extends Activity {
 
     private boolean onPageTouch(MotionEvent event) {
         if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+            stopAutoTurn();
             touchDownX = event.getX();
             touchDownY = event.getY();
             multiTouchGesture = false;
@@ -274,11 +296,19 @@ public final class ReaderActivity extends Activity {
         seekRow.addView(remainLabel, lp(dp(78), dp(36)));
         seekRow.setMinimumHeight(dp(48));
         panel.addView(seekRow, lp(-1, -2));
+        autoTurnButton = actionButton(getString(R.string.reader_auto_turn),
+                getString(R.string.reader_auto_turn), 14);
+        autoTurnButton.setTextColor(0xFFFF9A45);
+        autoTurnButton.setOnClickListener(v -> {
+            if (autoTurning) stopAutoTurn();
+            else showAutoTurnDialog();
+        });
+        panel.addView(autoTurnButton, lp(-1, dp(48)));
         progress.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar seekBar, int value, boolean fromUser) {
                 if (fromUser) updateLabels(value);
             }
-            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+            @Override public void onStartTrackingTouch(SeekBar seekBar) { stopAutoTurn(); }
             @Override public void onStopTrackingTouch(SeekBar seekBar) { showPage(seekBar.getProgress()); }
         });
         LinearLayout actions = new LinearLayout(this);
@@ -331,6 +361,10 @@ public final class ReaderActivity extends Activity {
     private void showPage(int requested) {
         int next = ReaderNavigation.clampPage(requested, comic.pageCount());
         page = next;
+        if (autoTurning) {
+            if (next >= comic.pageCount() - 1) stopAutoTurn();
+            else scheduleAutoTurn();
+        }
         updateLabels(next);
         updateBookmarkButton();
         repository.saveProgress(comic.id, next);
@@ -360,6 +394,10 @@ public final class ReaderActivity extends Activity {
         int next = ReaderNavigation.clampPage(value, comic.pageCount());
         if (page == next) return;
         page = next;
+        if (autoTurning) {
+            if (next >= comic.pageCount() - 1) stopAutoTurn();
+            else scheduleAutoTurn();
+        }
         updateLabels(next);
         updateBookmarkButton();
         repository.saveProgress(comic.id, next);
@@ -479,6 +517,7 @@ public final class ReaderActivity extends Activity {
     }
 
     private void showBookmarks() {
+        stopAutoTurn();
         List<Integer> pages = new ArrayList<>(bookmarks);
         Collections.sort(pages);
         if (pages.isEmpty()) {
@@ -497,6 +536,7 @@ public final class ReaderActivity extends Activity {
     }
 
     private void showPagePicker() {
+        stopAutoTurn();
         if (thumbnailLoader == null) thumbnailLoader = new CoverLoader();
         GridView grid = new GridView(this);
         grid.setNumColumns(GridView.AUTO_FIT);
@@ -556,6 +596,7 @@ public final class ReaderActivity extends Activity {
     }
 
     private void toggleChrome() {
+        if (!chromeVisible) stopAutoTurn();
         chromeVisible = !chromeVisible;
         topBar.animate().alpha(chromeVisible ? 1 : 0)
                 .translationY(chromeVisible ? 0 : -topBar.getHeight()).setDuration(180).start();
@@ -574,6 +615,7 @@ public final class ReaderActivity extends Activity {
     }
 
     private void toggleOrientation() {
+        stopAutoTurn();
         boolean landscape = getResources().getConfiguration().orientation
                 == android.content.res.Configuration.ORIENTATION_PORTRAIT;
         settings.setLandscape(landscape);
@@ -582,6 +624,7 @@ public final class ReaderActivity extends Activity {
     }
 
     private void brightnessDialog() {
+        stopAutoTurn();
         SeekBar seek = new SeekBar(this);
         seek.setMax(100);
         seek.setProgress(settings.brightnessPercent());
@@ -592,7 +635,7 @@ public final class ReaderActivity extends Activity {
                 applyBrightness(brightness);
                 if (fromUser) settings.setBrightnessPercent(brightness);
             }
-            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+            @Override public void onStartTrackingTouch(SeekBar seekBar) { stopAutoTurn(); }
             @Override public void onStopTrackingTouch(SeekBar seekBar) {}
         });
         new AlertDialog.Builder(this).setTitle(R.string.reader_brightness_title)
@@ -606,6 +649,7 @@ public final class ReaderActivity extends Activity {
     }
 
     private void showReaderInfo() {
+        stopAutoTurn();
         String direction = getString(rightToLeft
                 ? R.string.reader_direction_rtl : R.string.reader_direction_ltr);
         String mode = getString(continuousMode
@@ -617,6 +661,7 @@ public final class ReaderActivity extends Activity {
                         getString(R.string.reader_crop_setting, crop),
                         getString(R.string.reader_direction_setting, direction),
                         getString(R.string.reader_bookmarks_setting, bookmarks.size()),
+                        getString(R.string.reader_auto_turn),
                         getString(R.string.reader_help)
                 }, (dialog, which) -> {
                     if (which == 0) {
@@ -634,6 +679,7 @@ public final class ReaderActivity extends Activity {
                         Toast.makeText(this, getString(R.string.reader_direction_changed, changedDirection),
                                 Toast.LENGTH_SHORT).show();
                     } else if (which == 3) showBookmarks();
+                    else if (which == 4) showAutoTurnDialog();
                     else {
                         new AlertDialog.Builder(this).setTitle(R.string.reader_operation_title)
                                 .setMessage(continuousMode ? R.string.reader_operation_message_continuous
@@ -641,6 +687,78 @@ public final class ReaderActivity extends Activity {
                                 .setPositiveButton(R.string.reader_got_it, null).show();
                     }
                 }).setNegativeButton(R.string.reader_cancel, null).show();
+    }
+
+    private void showAutoTurnDialog() {
+        stopAutoTurn();
+        if (page >= comic.pageCount() - 1) {
+            Toast.makeText(this, R.string.reader_auto_turn_last_page, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(24), dp(8), dp(24), 0);
+        TextView label = text(getString(R.string.reader_auto_turn_seconds), 16,
+                getColor(R.color.manga_text_primary), false);
+        content.addView(label, lp(-1, -2));
+        EditText seconds = new EditText(this);
+        seconds.setId(View.generateViewId());
+        label.setLabelFor(seconds.getId());
+        seconds.setInputType(InputType.TYPE_CLASS_NUMBER);
+        seconds.setSingleLine(true);
+        seconds.setMinHeight(dp(48));
+        seconds.setText(String.valueOf(settings.autoTurnSeconds()));
+        seconds.selectAll();
+        content.addView(seconds, lp(-1, -2));
+        TextView hint = text(getString(R.string.reader_auto_turn_hint), 14,
+                getColor(R.color.manga_text_primary), false);
+        hint.setMaxLines(Integer.MAX_VALUE);
+        content.addView(hint, lp(-1, -2));
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle(R.string.reader_auto_turn).setView(content)
+                .setNegativeButton(R.string.reader_cancel, null)
+                .setPositiveButton(R.string.reader_auto_turn_start, null).create();
+        dialog.setOnShowListener(ignored -> dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                .setOnClickListener(view -> {
+                    int interval = ReaderNavigation.parseAutoTurnSeconds(seconds.getText().toString());
+                    if (interval == 0) {
+                        seconds.setError(getString(R.string.reader_auto_turn_invalid));
+                        return;
+                    }
+                    settings.setAutoTurnSeconds(interval);
+                    dialog.dismiss();
+                    // Stop any continuous-mode fling before beginning timed page jumps.
+                    showPage(page);
+                    autoTurning = true;
+                    autoTurnButton.setText(getString(R.string.reader_auto_turn_pause, interval));
+                    autoTurnButton.setContentDescription(autoTurnButton.getText());
+                    scheduleAutoTurn();
+                }));
+        dialog.show();
+    }
+
+    private void scheduleAutoTurn() {
+        autoTurnHandler.removeCallbacks(autoTurnTask);
+        autoTurnHandler.postDelayed(autoTurnTask, settings.autoTurnSeconds() * 1000L);
+    }
+
+    private void stopAutoTurn() {
+        autoTurning = false;
+        autoTurnHandler.removeCallbacks(autoTurnTask);
+        if (autoTurnButton != null) {
+            autoTurnButton.setText(R.string.reader_auto_turn);
+            autoTurnButton.setContentDescription(getString(R.string.reader_auto_turn));
+        }
+    }
+
+    @Override protected void onPause() {
+        stopAutoTurn();
+        super.onPause();
+    }
+
+    @Override public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (!hasFocus) stopAutoTurn();
     }
 
     private void reloadDecodedPages() {
@@ -660,10 +778,12 @@ public final class ReaderActivity extends Activity {
     @Override public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (event.getRepeatCount() == 0) {
             if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
+                stopAutoTurn();
                 showPage(page - 1);
                 return true;
             }
             if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+                stopAutoTurn();
                 showPage(page + 1);
                 return true;
             }
@@ -715,6 +835,7 @@ public final class ReaderActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        stopAutoTurn();
         destroyed = true;
         if (repository != null && comic != null) repository.saveProgress(comic.id, page);
         if (pageView != null) pageView.setImageDrawable(null);
