@@ -329,14 +329,6 @@ public final class MainActivity extends Activity implements LibraryView.Actions,
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
-    @Override public void search() {
-        EditText input = textField("漫画名称");
-        new AlertDialog.Builder(this).setTitle("搜索书架").setView(input)
-                .setNegativeButton("取消", null)
-                .setNeutralButton("清除", (d, w) -> library.setQuery(""))
-                .setPositiveButton("搜索", (d, w) -> library.setQuery(input.getText().toString())).show();
-    }
-
     @Override public void showInfo() {
         new AlertDialog.Builder(this).setTitle("漫匣")
                 .setItems(new String[]{"密码设置", "书架备份与恢复", getString(R.string.trash_menu), "功能介绍", "关于本软件"}, (dialog, which) -> {

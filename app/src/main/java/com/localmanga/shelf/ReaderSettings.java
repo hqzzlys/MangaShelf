@@ -30,6 +30,13 @@ final class ReaderSettings {
     boolean isLandscape() { return preferences.getBoolean(prefix + "landscape", false); }
     void setLandscape(boolean value) { preferences.edit().putBoolean(prefix + "landscape", value).apply(); }
 
+    int continuousPage() { return preferences.getInt(prefix + "continuousPage", -1); }
+    float continuousOffset() { return preferences.getFloat(prefix + "continuousOffset", 0f); }
+    void setContinuousPosition(int page, float fraction) {
+        preferences.edit().putInt(prefix + "continuousPage", page)
+                .putFloat(prefix + "continuousOffset", fraction).apply();
+    }
+
     int autoTurnSeconds() { return preferences.getInt(prefix + "autoTurnSeconds", 5); }
     void setAutoTurnSeconds(int value) {
         preferences.edit().putInt(prefix + "autoTurnSeconds", value).apply();

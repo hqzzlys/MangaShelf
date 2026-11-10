@@ -75,9 +75,34 @@
     <string name="comic_row_description">《%1$s》，%2$s</string>
     <string name="reader_auto_turn">自动翻页</string>
     <string name="reader_auto_turn_seconds">翻页间隔（秒）</string>
-    <string name="reader_auto_turn_hint">输入 1–3600 的整数。分页与连续阅读均按顺序进入下一页，到末页自动停止。触摸页面、打开菜单或离开应用会暂停，再次开始需手动开启。</string>
+    <string name="reader_auto_turn_hint">输入 1–3600 的整数。分页模式按页翻动，连续模式每次向下移动约一屏；图片加载完成后开始计时。到末尾自动停止，触摸页面、打开菜单或离开应用会暂停。点击“继续自动阅读”可按原间隔继续。</string>
     <string name="reader_auto_turn_start">开始</string>
     <string name="reader_auto_turn_pause">暂停自动翻页 · %1$d 秒</string>
     <string name="reader_auto_turn_invalid">请输入 1–3600 的整数秒数</string>
     <string name="reader_auto_turn_last_page">已到最后一页，请先返回前面的页面</string>
+    <string name="reader_auto_turn_continue">继续自动阅读</string>
+    <string name="reader_auto_turn_interval">设置间隔</string>
+    <string name="reader_page_loading">正在加载第 %1$d 页…</string>
+    <string name="reader_page_failed">第 %1$d 页加载失败，图片可能损坏或已丢失。请重试，或跳过本页。</string>
+    <string name="reader_retry_page">重试</string>
+    <string name="reader_skip_page">跳过本页</string>
+    <string name="library_search_hint">搜索漫画名称</string>
+    <string name="library_clear_search">清空</string>
+    <string name="library_resume">继续阅读</string>
+    <string name="library_resume_comic">继续阅读 · %1$s\n第 %2$d / %3$d 页</string>
+    <string name="library_stats_expand">展开书架统计</string>
+    <string name="library_stats_collapse">收起书架统计</string>
+    <string name="library_filter_summary">关键词：%1$s · 分类：%2$s · 合集：%3$s · %4$d 本</string>
+    <string name="library_no_keyword">不限</string>
+    <string name="library_all_collections">全部</string>
+    <string name="library_reset_filters">清除搜索与筛选</string>
+    <string name="library_empty">书架还是空的\n点击右下角 + 导入漫画</string>
+    <string name="library_no_results">当前搜索和筛选条件下没有漫画</string>
+    <string-array name="library_sort_choices">
+        <item>最近更新</item><item>漫画名称</item><item>阅读进度</item>
+    </string-array>
+    <string-array name="library_category_choices">
+        <item>全部</item><item>最近阅读</item><item>未读</item><item>收藏</item><item>读完</item>
+    </string-array>
+    <string name="library_category_count">%1$s · %2$d</string>
 </resources>

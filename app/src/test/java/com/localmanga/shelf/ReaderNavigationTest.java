@@ -33,6 +33,19 @@ public class ReaderNavigationTest {
         }
     }
 
+    @Test public void continuousReadingAdvancesLessThanOneScreen() {
+        assertEquals(850, ReaderNavigation.scrollStep(1000));
+        assertEquals(425, ReaderNavigation.scrollStep(500));
+    }
+
+    @Test public void continuousPositionRestoresWithinTheImageAfterResizing() {
+        float fraction = ReaderNavigation.offsetFraction(1800, 6000);
+        assertEquals(.3f, fraction, .0001f);
+        assertEquals(900, ReaderNavigation.offsetPixels(fraction, 3000));
+        assertEquals(0f, ReaderNavigation.offsetFraction(-100, 6000), 0f);
+        assertEquals(0f, ReaderNavigation.offsetFraction(100, 0), 0f);
+    }
+
     @Test public void requestedPageIsClampedToLibraryBounds() {
         assertEquals(0, ReaderNavigation.clampPage(-3, 10));
         assertEquals(4, ReaderNavigation.clampPage(4, 10));

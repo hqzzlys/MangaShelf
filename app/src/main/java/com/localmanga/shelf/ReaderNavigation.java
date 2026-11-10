@@ -24,6 +24,18 @@ final class ReaderNavigation {
         }
     }
 
+    static int scrollStep(int viewportHeight) {
+        return Math.max(1, Math.round(viewportHeight * .85f));
+    }
+
+    static float offsetFraction(int offset, int imageHeight) {
+        return imageHeight <= 0 ? 0f : Math.max(0f, Math.min(1f, offset / (float) imageHeight));
+    }
+
+    static int offsetPixels(float fraction, int imageHeight) {
+        return Math.round(Math.max(0f, Math.min(1f, fraction)) * imageHeight);
+    }
+
     static int clampPage(int requested, int pageCount) {
         if (pageCount <= 0) return 0;
         return Math.max(0, Math.min(requested, pageCount - 1));
